@@ -1,0 +1,811 @@
+# Copyright (C) 2026 serrebidev
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Apple Music's preference commands, scoped to AppleMusic.exe.
+
+All UI operations run on NVDA's main thread. Timed polls let NVDA process
+focus events without sleeping. Menus are matched by name; toggles check state.
+"""
+
+import time
+import re
+from collections import deque
+
+import api
+import appModuleHandler
+import controlTypes
+import core
+import keyboardHandler
+import UIAHandler
+import ui
+from logHandler import log
+from NVDAObjects.UIA import UIA
+from scriptHandler import script
+
+
+Role = controlTypes.Role
+State = controlTypes.State
+ITEM_ROLES = {Role.LISTITEM, Role.TABLEROW, Role.DATAITEM}
+MENU_ROLES = {Role.POPUPMENU, Role.MENUITEM}
+ACTIONS = {
+	"play": {
+		"label": "Play", "names": {"play"}, "undo": set(),
+		"already": "", "success": "Playing track.",
+	},
+	"suggestLess": {
+		"label": "Suggest Less",
+		"names": {"suggest less"},
+		"undo": {"undo suggest less"},
+		"already": "Already set to suggest less.",
+		"success": "Suggest less.",
+	},
+	"favorite": {
+		"label": "Favorite",
+		"names": {"favorite", "favourite", "add to favorites", "add to favourites"},
+		"undo": {"undo favorite", "undo favourite", "remove from favorites", "remove from favourites", "unfavorite", "unfavourite", "favorited", "favourited"},
+		"already": "Already a favorite.",
+		"success": "Added to favorites.",
+	},
+}
+COMMAND_NAMES = set().union(*(action["names"] | action["undo"] for action in ACTIONS.values()))
+MORE_NAMES = {"action", "more", "more options", "more actions"}
+TRANSPORT_NAMES = {"shuffle", "repeat", "play", "pause", "play/pause", "skip forwards", "skip backwards", "next", "previous"}
+SECTION_ORDER = ("Search", "Sidebar", "Player", "Main content", "Queue", "Lyrics")
+PLAYER_NAMES = TRANSPORT_NAMES | {
+	"volume", "airplay", "mute", "lyrics", "queue", "playing next", "lossless",
+	"hi-res lossless", "high-resolution lossless", "audio quality",
+	"favorite", "favourite", "undo favorite", "undo favourite",
+}
+PLAYER_IDS = {
+	"ShuffleButton", "RepeatButton", "TransportControl_PlayPauseStop",
+	"TransportControl_SkipForward", "TransportControl_SkipBack", "AudioBadgeButton", "VolumeButton",
+	"AirPlayButton", "LyricsToggleButton", "PlayQueueToggleButton",
+}
+
+
+def isSidebarItem(obj):
+	"""WinUI navigation entries are exposed as ListItem, not TreeViewItem."""
+	if not isinstance(obj, UIA):
+		return obj.role in {Role.TREEVIEW, Role.TREEVIEWITEM}
+	return (
+		obj.role in {Role.TREEVIEW, Role.TREEVIEWITEM}
+		or (obj.UIAElement.cachedAutomationId or "").startswith("Sidebar_")
+		or (obj.UIAElement.cachedClassName or "").rsplit(".", 1)[-1] == "NavigationViewItem"
+	)
+
+
+def sectionFor(obj, processID, lineage=None):
+	"""Classify focus using accessible roles and named ancestors, not geometry."""
+	if lineage is None:
+		lineage = []
+		for parent in ancestors(obj):
+			if parent.processID != processID:
+				break
+			lineage.append(parent)
+	for parent in lineage:
+		if isinstance(parent, UIA) and parent.UIAElement.cachedAutomationId == "TransportBar":
+			return "Player"
+	for parent in lineage:
+		if parent.role in {Role.PANE, Role.GROUPING, Role.LIST, Role.DOCUMENT}:
+			name = normalizedName(parent.name)
+			if name in {"queue", "playing next", "up next"}:
+				return "Queue"
+			if name == "lyrics":
+				return "Lyrics"
+	if any(isSidebarItem(parent) for parent in lineage):
+		return "Sidebar"
+	if isinstance(obj, UIA) and obj.UIAElement.cachedAutomationId == "NavigationViewBackButton":
+		return "Sidebar"
+	if obj.role == Role.TOGGLEBUTTON and normalizedName(obj.name) in {"playing next", "history"}:
+		return "Queue"
+	if obj.role == Role.EDITABLETEXT and normalizedName(obj.name) in {"search", "search apple music", "search field"}:
+		return "Search"
+	if obj.role == Role.BUTTON and normalizedName(obj.name) in {"search", "search apple music", "click to search"}:
+		return "Search"
+	if isinstance(obj, UIA) and obj.UIAElement.cachedAutomationId == "Search_Button":
+		return "Search"
+	if obj.role == Role.BUTTON and normalizedName(obj.name) in {"sidebar", "sidebar actions", "navigation menu", "open navigation", "close navigation"}:
+		return "Sidebar"
+	if any(parent.role == Role.GROUPING and parent.name == "Content" and isinstance(parent, UIA) and parent.UIAElement.cachedClassName == "LandmarkTarget" for parent in lineage):
+		return "Main content"
+	if any(parent.role in ITEM_ROLES for parent in lineage):
+		return "Main content"
+	# Observed player identifiers survive changing state labels/localization.
+	if isinstance(obj, UIA) and obj.UIAElement.cachedAutomationId in PLAYER_IDS:
+		return "Player"
+	if any(parent.role in {Role.PANE, Role.GROUPING, Role.TOOLBAR} and normalizedName(parent.name) in {"player", "now playing", "playback controls", "transport controls"} for parent in lineage):
+		return "Player"
+	if obj.role in {Role.BUTTON, Role.TOGGLEBUTTON, Role.SLIDER, Role.SPLITBUTTON}:
+		if obj.role == Role.SLIDER and not obj.name:
+			return "Player"
+		if normalizedName(obj.name) in PLAYER_NAMES:
+			return "Player"
+		if normalizedName(obj.name) == "action":
+			return "Player"
+	return "Main content"
+
+
+def trackRow(obj, processID):
+	"""Identify Apple's numbered song rows, excluding cards/sidebar entries."""
+	for candidate in ancestors(obj):
+		if candidate.processID != processID or candidate.role in MENU_ROLES:
+			return None
+		if candidate.role in ITEM_ROLES:
+			if not isSidebarItem(candidate) and re.match(r"^track\s+\d+\b", normalizedName(candidate.name)):
+				return candidate
+			return None
+	return None
+
+
+def revealTrack(row):
+	"""SetFocus alone does not scroll Apple's partly visible rows into view."""
+	try:
+		pattern = row._getUIAPattern(UIAHandler.UIA_ScrollItemPatternId, UIAHandler.IUIAutomationScrollItemPattern)
+		if pattern:
+			pattern.ScrollIntoView()
+			return True
+	except Exception:
+		log.debug("Apple Music: track has no usable ScrollItem pattern", exc_info=True)
+	return False
+
+
+def playerMoreSteps(focus, processID):
+	"""Find More in a small player container, never an arbitrary page More button.
+
+	Require multiple transport controls and reject content rows/navigation trees.
+	A bounded complete scan avoids guessing when only part of a tree was read.
+	"""
+	# Queue/Lyrics controls can live outside the player's ancestor chain.
+	# Match the observed player ActionButton identity, never an arbitrary More.
+	client = UIAHandler.handler.clientObject
+	root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+	condition = client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True)
+	elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+	identified = []
+	transportIDs = set()
+	if elements and elements.Length <= 1000:
+		for index in range(elements.Length):
+			yield
+			obj = UIA(UIAElement=elements.GetElement(index))
+			identifier = obj.UIAElement.cachedAutomationId
+			if identifier not in PLAYER_IDS | {"ActionButton"}:
+				continue
+			if obj.processID != processID or obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}:
+				continue
+			lineage = list(ancestors(obj))
+			if any(parent.role in ITEM_ROLES | MENU_ROLES | {Role.DIALOG} or isSidebarItem(parent) for parent in lineage):
+				continue
+			if identifier == "ActionButton" and obj.role in {Role.BUTTON, Role.SPLITBUTTON} and normalizedName(obj.name) in MORE_NAMES:
+				identified.append(obj)
+			elif identifier in {"ShuffleButton", "RepeatButton", "TransportControl_PlayPauseStop", "TransportControl_SkipForward"}:
+				transportIDs.add(identifier)
+		if len(identified) == 1 and len(transportIDs) >= 2:
+			return identified[0]
+		if len(identified) > 1:
+			return None
+	for depth, parent in enumerate(ancestors(focus)):
+		if depth >= 7 or parent.processID != processID or parent.role == Role.WINDOW:
+			break
+		if parent.role in ITEM_ROLES or parent.role in MENU_ROLES:
+			return None
+		pending = deque([parent])
+		buttons = []
+		transport = set()
+		unsafe = False
+		for unused in range(120):
+			yield
+			if not pending:
+				break
+			obj = pending.popleft()
+			if obj.processID != processID:
+				continue
+			if obj.role in ITEM_ROLES or obj.role == Role.TREEVIEWITEM:
+				unsafe = True
+				break
+			if State.INVISIBLE in obj.states or State.OFFSCREEN in obj.states:
+				continue
+			if obj.role in {Role.BUTTON, Role.TOGGLEBUTTON, Role.SPLITBUTTON}:
+				name = normalizedName(obj.name)
+				if name in MORE_NAMES and State.UNAVAILABLE not in obj.states:
+					buttons.append(obj)
+				if name in TRANSPORT_NAMES:
+					transport.add(name)
+			child = obj.firstChild
+			for childIndex in range(120):
+				yield
+				if child is None:
+					break
+				pending.append(child)
+				child = child.next
+			if child is not None:
+				unsafe = True
+				break
+		if not unsafe and not pending and len(buttons) == 1 and len(transport) >= 2:
+			return buttons[0]
+	return None
+
+
+def normalizedName(name):
+	"""Allow access-key markers, whitespace and trailing menu ellipses only."""
+	return " ".join((name or "").replace("&", "").split()).rstrip(".\u2026").strip().casefold()
+
+
+def ancestors(obj):
+	seen = set()
+	for unused in range(24):
+		if obj is None:
+			return
+		key = tuple(obj.UIAElement.GetRuntimeId()) if isinstance(obj, UIA) else id(obj)
+		if key in seen:
+			return
+		seen.add(key)
+		yield obj
+		obj = obj.parent
+
+
+def focusedItem(obj, processID):
+	"""A row/card containing focus, never an arbitrary selected item elsewhere."""
+	for candidate in ancestors(obj):
+		if candidate.processID != processID:
+			break
+		if candidate.role in MENU_ROLES or isSidebarItem(candidate):
+			return None
+		if candidate.role in ITEM_ROLES:
+			return candidate
+	return None
+
+
+def focusedMenu(obj, processID):
+	for candidate in ancestors(obj):
+		if candidate.processID != processID:
+			break
+		if candidate.role == Role.POPUPMENU:
+			return candidate
+	return None
+
+
+def menuCommands(root, processID):
+	"""Inspect only the open menu. Never open submenus or scan the app globally."""
+	commands = {}
+	pending = [root]
+	for unused in range(150):
+		if not pending:
+			break
+		obj = pending.pop()
+		if obj.processID != processID:
+			continue
+		if State.INVISIBLE in obj.states or State.OFFSCREEN in obj.states:
+			continue
+		if obj.role == Role.MENUITEM:
+			name = normalizedName(obj.name)
+			if re.fullmatch(r'play ["\u201c].+["\u201d]', name):
+				name = "play"
+			if name in COMMAND_NAMES:
+				commands.setdefault(name, []).append(obj)
+			# Do not descend into unopened submenu items.
+			continue
+		child = obj.firstChild
+		for childIndex in range(100):
+			if child is None:
+				break
+			pending.append(child)
+			child = child.next
+		if child is not None:
+			raise RuntimeError("Apple Music menu has too many children to inspect safely")
+	if pending:
+		raise RuntimeError("Apple Music menu is too large to inspect safely")
+	return commands
+
+
+class AppModule(appModuleHandler.AppModule):
+	scriptCategory = "Apple Music"
+	_operation = None
+	_generation = 0
+	_navigationGeneration = 0
+	_trackFocusGeneration = 0
+	_trackPage = None
+
+	def _trackRows(self):
+		client = UIAHandler.handler.clientObject
+		root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+		condition = client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True)
+		elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+		rows = []
+		if elements and elements.Length <= 1000:
+			for index in range(elements.Length):
+				element = elements.GetElement(index)
+				if not re.match(r"^track\s+\d+\b", normalizedName(element.cachedName)):
+					continue
+				obj = UIA(UIAElement=element)
+				if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} and trackRow(obj, self.processID) is obj and sectionFor(obj, self.processID) == "Main content":
+					rows.append(obj)
+		return rows
+
+	def event_gainFocus(self, obj, nextHandler):
+		nextHandler()
+		self._trackFocusGeneration += 1
+		if isinstance(obj, UIA) and tuple(obj.UIAElement.GetRuntimeId()) == getattr(self, "_manualSectionTarget", None):
+			self._manualSectionTarget = None
+			row = trackRow(obj, self.processID)
+			if row:
+				self._trackPage = tuple(row.parent.UIAElement.GetRuntimeId())
+			return
+		if not self._active() or self._operation is not None or not isinstance(obj, UIA):
+			return
+		if trackRow(obj, self.processID):
+			row = trackRow(obj, self.processID)
+			self._trackPage = tuple(row.parent.UIAElement.GetRuntimeId())
+			return
+		if sectionFor(obj, self.processID) in {"Player", "Queue", "Lyrics"} or any(parent.role in MENU_ROLES | {Role.DIALOG} for parent in ancestors(obj)):
+			return
+		self._scheduleTrackFocus(obj)
+
+	def _scheduleTrackFocus(self, original):
+		generation = self._trackFocusGeneration
+		originalID = tuple(original.UIAElement.GetRuntimeId())
+		attempts = 0
+		def check():
+			nonlocal attempts
+			if generation != self._trackFocusGeneration or not self._active() or self._operation is not None:
+				return
+			try:
+				focus = self._focus()
+				if focus is None or tuple(focus.UIAElement.GetRuntimeId()) != originalID:
+					return
+				rows = self._trackRows()
+				if rows:
+					page = tuple(rows[0].parent.UIAElement.GetRuntimeId())
+					if page != self._trackPage:
+						self._trackPage = page
+						revealTrack(rows[0])
+						rows[0].setFocus()
+						return
+				attempts += 1
+				if attempts < 6:
+					core.callLater(600, check)
+			except Exception:
+				log.debugWarning("Apple Music: track-list focus unavailable", exc_info=True)
+		core.callLater(400, check)
+
+	@script(description="Play the focused track, or activate the focused control", gestures=["kb:enter", "kb:numpadEnter"])
+	def script_playTrack(self, gesture):
+		focus = self._focus() if self._active() else None
+		if focus is not None and trackRow(focus, self.processID) is not None:
+			self._begin("play")
+		else:
+			gesture.send()
+			if focus is not None:
+				self._trackFocusGeneration += 1
+				self._scheduleTrackFocus(focus)
+
+	def _active(self):
+		foreground = api.getForegroundObject()
+		return foreground is not None and foreground.processID == self.processID
+
+	def _focus(self):
+		# Ask UIA directly: NVDA's focus event may still be queued after Ctrl+L.
+		element = UIAHandler.handler.clientObject.GetFocusedElement()
+		if element and element.CurrentProcessId == self.processID:
+			# NVDA's UIA constructor reads cached properties (including the
+			# framework ID). A raw GetFocusedElement result lacks that cache.
+			return UIA(UIAElement=element.BuildUpdatedCache(UIAHandler.handler.baseCacheRequest))
+		return None
+
+	def _action(self):
+		return ACTIONS[self._operation["action"]]
+
+	def _selectedItems(self):
+		"""Query selected rows within the original window, with NVDA's cache."""
+		client = UIAHandler.handler.clientObject
+		root = self._operation["root"]
+		condition = client.CreatePropertyCondition(UIAHandler.UIA_SelectionItemIsSelectedPropertyId, True)
+		elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+		items = {}
+		if not elements or elements.Length > 100:
+			return items
+		for index in range(elements.Length):
+			element = elements.GetElement(index)
+			if element.CurrentProcessId != self.processID:
+				continue
+			obj = UIA(UIAElement=element)
+			if obj.role in ITEM_ROLES and State.INVISIBLE not in obj.states and State.OFFSCREEN not in obj.states:
+				items[tuple(element.GetRuntimeId())] = obj
+		return items
+
+	def _later(self, callback, delay=100):
+		generation = self._generation
+
+		def run():
+			if self._operation is None or generation != self._generation:
+				return
+			try:
+				if not self._active():
+					self._finish(f"{self._action()['label']} cancelled: Apple Music is no longer active.", restore=False)
+					return
+				callback()
+			except Exception:
+				log.exception("Apple Music Suggest Less: UI Automation operation failed")
+				self._finish(f"{self._action()['label']} failed. Apple Music's controls could not be accessed.")
+
+		core.callLater(delay, run)
+
+	@script(
+		description="Suggest less of the focused song or album, or the current song from the player",
+		gesture="kb:control+alt+downArrow",
+	)
+	def script_suggestLess(self, gesture):
+		self._begin("suggestLess")
+
+	@script(
+		description="Favorite the focused song or album, or the current song from the player",
+		gesture="kb:control+alt+upArrow",
+	)
+	def script_favorite(self, gesture):
+		self._begin("favorite")
+
+	@script(description="Move to the next Apple Music section", gesture="kb:f6")
+	def script_nextSection(self, gesture):
+		self._switchSection(1)
+
+	@script(description="Move to the previous Apple Music section", gesture="kb:shift+f6")
+	def script_previousSection(self, gesture):
+		self._switchSection(-1)
+
+	def _switchSection(self, direction):
+		self._trackFocusGeneration += 1
+		if not self._active():
+			return
+		if self._operation is not None:
+			ui.message("Wait for the current Apple Music command to finish.")
+			return
+		# Key repeat must not starve discovery by restarting it every 200 ms.
+		# Keep one scan and let the newest press choose its travel direction.
+		if getattr(self, "_navigationScan", None) == self._navigationGeneration:
+			self._navigationDirection = direction
+			return
+		self._navigationGeneration += 1
+		generation = self._navigationGeneration
+		self._navigationDirection = direction
+		try:
+			original = self._focus()
+			originalID = tuple(original.UIAElement.GetRuntimeId()) if original else None
+		except Exception:
+			ui.message("Apple Music's focused control is unavailable.")
+			return
+		steps = self._navigationSteps(direction, originalID)
+		self._navigationScan = generation
+
+		def advance():
+			if generation != self._navigationGeneration or not self._active():
+				if self._navigationScan == generation:
+					self._navigationScan = None
+				steps.close()
+				return
+			try:
+				# No fixed delay for every control: process a small time-limited
+				# batch, then yield to NVDA. This also avoids seconds of timer delay.
+				deadline = time.monotonic() + 0.025
+				for unused in range(8):
+					next(steps)
+					if time.monotonic() >= deadline:
+						break
+			except StopIteration:
+				if self._navigationScan == generation:
+					self._navigationScan = None
+				return
+			core.callLater(1, advance)
+
+		core.callLater(1, advance)
+
+	def _navigationSteps(self, direction, originalID):
+		try:
+			focus = self._focus()
+			if focus is None:
+				ui.message("Apple Music's focused control is unavailable.")
+				return
+			if tuple(focus.UIAElement.GetRuntimeId()) != originalID:
+				return
+			if any(obj.role in MENU_ROLES or obj.role == Role.DIALOG for obj in ancestors(focus)):
+				ui.message("Close the menu or dialog before switching sections.")
+				return
+			focusID = tuple(focus.UIAElement.GetRuntimeId())
+			current = sectionFor(focus, self.processID)
+			remembered = getattr(self, "_sectionFocus", {})
+			remembered[current] = focusID
+			self._sectionFocus = remembered
+			yield
+			client = UIAHandler.handler.clientObject
+			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+			condition = client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True)
+			elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+			sections = {}
+			if elements and elements.Length <= 1000:
+				for index in range(elements.Length):
+					yield
+					obj = UIA(UIAElement=elements.GetElement(index))
+					if obj.processID != self.processID or obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}:
+						continue
+					if obj.role in {Role.WINDOW, Role.TITLEBAR, Role.MENUBAR, Role.GROUPING, Role.PANE}:
+						continue
+					# An unnamed player position slider is not a main-content destination.
+					if obj.role == Role.SLIDER and not obj.name:
+						continue
+					lineage = list(ancestors(obj))
+					if any(parent.role == Role.TITLEBAR for parent in lineage):
+						continue
+					section = sectionFor(obj, self.processID, lineage)
+					log.debug("Apple Music section candidate: %s; role=%s; id=%s; section=%s", obj.name, obj.role, obj.UIAElement.cachedAutomationId, section)
+					sections.setdefault(section, []).append(obj)
+					direction = self._navigationDirection
+					preferred = SECTION_ORDER[(SECTION_ORDER.index(current) + direction) % len(SECTION_ORDER)]
+					# As soon as the next section is found, further content rows
+					# cannot improve the destination (unless restoring a saved control).
+					if section == preferred and (preferred != "Main content" or trackRow(obj, self.processID) is not None) and (preferred not in remembered or tuple(obj.UIAElement.GetRuntimeId()) == remembered[preferred]):
+						break
+			available = [name for name in SECTION_ORDER if name in sections]
+			direction = self._navigationDirection
+			preferred = SECTION_ORDER[(SECTION_ORDER.index(current) + direction) % len(SECTION_ORDER)]
+			if not any(name != current for name in available):
+				ui.message("No other Apple Music section is available.")
+				return
+			if preferred in available:
+				destination = preferred
+			elif current in available:
+				destination = available[(available.index(current) + direction) % len(available)]
+			else:
+				destination = available[0 if direction > 0 else -1]
+			candidates = sections[destination]
+			if destination == "Main content":
+				tracks = [obj for obj in candidates if re.match(r"^track\s+\d+\b", normalizedName(obj.name)) and trackRow(obj, self.processID) is obj]
+				if tracks:
+					candidates = tracks
+			target = next((obj for obj in candidates if tuple(obj.UIAElement.GetRuntimeId()) == remembered.get(destination)), candidates[0])
+			actual = self._focus()
+			if actual is None or tuple(actual.UIAElement.GetRuntimeId()) != focusID:
+				return
+			generation = self._navigationGeneration
+			targetID = tuple(target.UIAElement.GetRuntimeId())
+			self._manualSectionTarget = targetID
+			if trackRow(target, self.processID):
+				revealTrack(target)
+			target.setFocus()
+
+			def report():
+				if generation != self._navigationGeneration or not self._active():
+					return
+				try:
+					actual = self._focus()
+					if actual and tuple(actual.UIAElement.GetRuntimeId()) == targetID:
+						ui.message(destination)
+					else:
+						ui.message(f"Apple Music could not focus {destination.lower()}.")
+				except Exception:
+					log.debugWarning("Apple Music: section focus verification failed", exc_info=True)
+					ui.message("Apple Music could not confirm section focus.")
+
+			core.callLater(150, report)
+		except Exception:
+			log.exception("Apple Music: section navigation failed")
+			ui.message("Apple Music's sections could not be accessed.")
+
+	def _begin(self, action):
+		if not self._active():
+			return
+		if self._operation is not None:
+			ui.message(f"{self._action()['label']} is already in progress.")
+			return
+		self._generation += 1
+		self._navigationGeneration += 1
+		self._operation = {"action": action, "original": None, "restore": False, "openedMenu": False}
+		# Defer to avoid injecting keys inside the triggering script.
+		self._later(self._start)
+
+	def _start(self):
+		focus = self._focus()
+		if focus is None:
+			self._finish("Apple Music's focused control is not available through UI Automation.")
+			return
+		self._operation["original"] = focus
+		if any(obj.role in MENU_ROLES for obj in ancestors(focus)):
+			self._finish("Close the menu and focus a song, album, or player control first.")
+			return
+		item = focusedItem(focus, self.processID)
+		if item is not None:
+			self._openMenu(item)
+			return
+		self._operation["restore"] = True
+		# Apple Music exposes the player's More button as "Action". A focused
+		# menu button is already an explicit target; do not search its siblings.
+		if focus.role in {Role.BUTTON, Role.SPLITBUTTON} and normalizedName(focus.name) in MORE_NAMES:
+			self._usePlayerMore(focus)
+			return
+		self._operation["playerSearch"] = playerMoreSteps(focus, self.processID)
+		self._operation["searchDeadline"] = time.monotonic() + 3.0
+		self._findPlayerMore()
+
+	def _findPlayerMore(self):
+		try:
+			# Small batches allow NVDA to handle focus, speech and input between reads.
+			for unused in range(8):
+				next(self._operation["playerSearch"])
+		except StopIteration as result:
+			self._usePlayerMore(result.value)
+			return
+		if time.monotonic() >= self._operation["searchDeadline"]:
+			self._usePlayerMore(None)
+		else:
+			self._later(self._findPlayerMore, 20)
+
+	def _usePlayerMore(self, more):
+		focus = self._operation["original"]
+		actual = self._focus()
+		if actual is None or tuple(actual.UIAElement.GetRuntimeId()) != tuple(focus.UIAElement.GetRuntimeId()):
+			self._finish("Apple Music command cancelled: focus changed.", restore=False)
+			return
+		if more is not None and isinstance(more, UIA) and more.UIAInvokePattern:
+			log.debug("Apple Music preferences: invoking Action/More button")
+			self._operation["playerMenu"] = True
+			self._operation["target"] = tuple(focus.UIAElement.GetRuntimeId())
+			more.UIAInvokePattern.Invoke()
+			self._operation["openedMenu"] = True
+			self._operation["deadline"] = time.monotonic() + 2.0
+			self._later(self._waitForMenu, 150)
+			return
+		self._revealSong()
+
+	def _revealSong(self):
+		client = UIAHandler.handler.clientObject
+		self._operation["root"] = client.ElementFromHandleBuildCache(
+			api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest,
+		)
+		self._operation["beforeSelection"] = set(self._selectedItems())
+		log.debug("Apple Music preferences: trying Ctrl+L, checking focus and newly selected rows")
+		keyboardHandler.KeyboardInputGesture.fromName("control+l").send()
+		self._operation["deadline"] = time.monotonic() + 3.0
+		self._later(self._waitForSong, 200)
+
+	def _waitForSong(self):
+		focus = self._focus()
+		item = focusedItem(focus, self.processID) if focus else None
+		if item is not None:
+			self._openMenu(item)
+			return
+		selected = self._selectedItems()
+		newItems = set(selected) - self._operation["beforeSelection"]
+		if len(selected) == 1 and len(newItems) == 1:
+			item = selected[newItems.pop()]
+			self._operation["pendingTarget"] = tuple(item.UIAElement.GetRuntimeId())
+			item.setFocus()
+			self._later(self._waitForTargetFocus)
+			return
+		if time.monotonic() < self._operation["deadline"]:
+			self._later(self._waitForSong)
+		else:
+			log.debug("Apple Music preferences: Ctrl+L did not expose a focused or newly selected song")
+			self._finish("Apple Music did not expose the current song. Focus the song or its More button and try again.")
+
+	def _waitForTargetFocus(self):
+		focus = self._focus()
+		item = focusedItem(focus, self.processID) if focus else None
+		if item is not None and tuple(item.UIAElement.GetRuntimeId()) == self._operation["pendingTarget"]:
+			self._openMenu(item)
+		elif time.monotonic() < self._operation["deadline"]:
+			self._later(self._waitForTargetFocus)
+		else:
+			self._finish("Apple Music selected the current song but could not focus it.")
+
+	def _openMenu(self, item):
+		# A context menu can affect every selected row. Refuse bulk actions.
+		for parent in ancestors(item.parent):
+			if parent.processID != self.processID:
+				break
+			if isinstance(parent, UIA) and parent.UIASelectionPattern:
+				selection = parent.UIASelectionPattern.GetCurrentSelection()
+				if selection and selection.Length > 1:
+					self._finish(f"Select only one song or album before using {self._action()['label']}.")
+					return
+				break
+		# Focus stays within this item; Shift+F10 is Apple's documented shortcut.
+		self._operation["target"] = tuple(item.UIAElement.GetRuntimeId())
+		if trackRow(item, self.processID) and revealTrack(item):
+			self._later(self._sendTrackMenu, 150)
+			return
+		self._sendTrackMenu()
+
+	def _sendTrackMenu(self):
+		focus = self._focus()
+		item = focusedItem(focus, self.processID) if focus else None
+		if item is None or tuple(item.UIAElement.GetRuntimeId()) != self._operation["target"]:
+			self._finish("Apple Music command cancelled: focus changed.", restore=False)
+			return
+		keyboardHandler.KeyboardInputGesture.fromName("shift+f10").send()
+		self._operation["openedMenu"] = True
+		self._operation["deadline"] = time.monotonic() + 2.0
+		self._later(self._waitForMenu, 150)
+
+	def _waitForMenu(self):
+		action = self._action()
+		label = action["label"]
+		focus = self._focus()
+		menu = focusedMenu(focus, self.processID) if focus else None
+		openingPopup = focus is not None and focus.role == Role.WINDOW and normalizedName(focus.name) in {"pop-up", "popup"}
+		if focus and menu is None and not openingPopup and not self._operation.get("playerMenu"):
+			item = focusedItem(focus, self.processID)
+			if item is None or tuple(item.UIAElement.GetRuntimeId()) != self._operation["target"]:
+				self._finish(f"{label} cancelled: focus changed.", restore=False)
+				return
+		if menu is not None:
+			commands = menuCommands(menu, self.processID)
+			# Undo wins even if a provider momentarily exposes both states.
+			if any(commands.get(name) for name in action["undo"]):
+				self._finish(action["already"])
+				return
+			suggestions = [command for name in action["names"] for command in commands.get(name, [])]
+			if len(suggestions) > 1:
+				self._finish(f"{label} is ambiguous in this menu.")
+				return
+			if suggestions:
+				command = suggestions[0]
+				if State.CHECKED in command.states:
+					self._finish(action["already"])
+					return
+				if State.UNAVAILABLE in command.states:
+					self._finish(f"{label} is unavailable for this item.")
+					return
+				# Apple's checkable menu items expose Toggle instead of Invoke.
+				# Read the live toggle state, not just NVDA's cached CHECKED state.
+				toggle = command.UIATogglePattern if isinstance(command, UIA) else None
+				pattern = command.UIAInvokePattern if isinstance(command, UIA) else None
+				if not toggle and not pattern:
+					self._finish(f"Apple Music does not expose a supported action for {label}.")
+					return
+				if not self._active():
+					self._finish(f"{label} cancelled.", restore=False)
+					return
+				if toggle:
+					state = toggle.CurrentToggleState
+					if state == UIAHandler.ToggleState_On:
+						self._finish(action["already"])
+						return
+					if state != UIAHandler.ToggleState_Off:
+						self._finish(f"{label} has an uncertain checked state; no change made.")
+						return
+					toggle.Toggle()
+				else:
+					pattern.Invoke()
+				# Give the popup time to close before restoring player focus.
+				self._later(lambda: self._finish(action["success"]), 200)
+				return
+		if time.monotonic() < self._operation["deadline"]:
+			self._later(self._waitForMenu)
+		else:
+			self._finish(f"{label} not available.")
+
+	def _finish(self, message, restore=True):
+		operation = self._operation
+		self._operation = None
+		self._generation += 1
+		if operation is None:
+			return
+		if restore and (operation["openedMenu"] or operation["restore"]) and self._active():
+			try:
+				if operation["openedMenu"]:
+					focus = self._focus()
+					if focus and focusedMenu(focus, self.processID):
+						keyboardHandler.KeyboardInputGesture.fromName("escape").send()
+			except Exception:
+				log.debugWarning("Apple Music preferences: could not close menu", exc_info=True)
+				message += " The menu could not be closed."
+			try:
+				if operation["restore"] and operation["original"]:
+					operation["original"].setFocus()
+			except Exception:
+				log.debugWarning("Apple Music preferences: could not restore focus", exc_info=True)
+				message += " Original focus could not be restored."
+		ui.message(message)
+
+	def terminate(self):
+		self._trackFocusGeneration += 1
+		self._navigationGeneration += 1
+		self._generation += 1
+		self._operation = None
+		super().terminate()

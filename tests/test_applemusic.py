@@ -1,0 +1,928 @@
+"""Exercise the real app module with a deterministic NVDA/UIA test harness."""
+import importlib.util
+from pathlib import Path
+import sys
+import types
+import unittest
+from unittest.mock import Mock
+
+
+class Node:
+    counter = 0
+
+    def __new__(cls, *args, UIAElement=None, **kwargs):
+        if UIAElement is not None:
+            if not UIAElement.cacheBuilt:
+                raise RuntimeError("UIA constructor requires NVDA's base property cache")
+            return UIAElement
+        return super().__new__(cls)
+
+    def __init__(self, role=None, name="", children=(), processID=42, UIAElement=None):
+        if UIAElement is not None:
+            return
+        Node.counter += 1
+        self.identity = Node.counter
+        self.role, self.name, self.processID = role, name, processID
+        self.CurrentProcessId = processID
+        self.cachedAutomationId = ""
+        self.cachedClassName = ""
+        self.cacheBuilt = False
+        self.parent = self.firstChild = self.next = None
+        self.states = set()
+        self.UIAElement = self
+        self.UIAInvokePattern = Mock()
+        self.UIATogglePattern = None
+        self.UIASelectionPattern = None
+        self._getUIAPattern = Mock(return_value=None)
+        self.setFocus = Mock()
+        for index, child in enumerate(children):
+            child.parent = self
+            if index:
+                children[index - 1].next = child
+            else:
+                self.firstChild = child
+
+    def GetRuntimeId(self):
+        return [self.identity]
+
+    @property
+    def cachedName(self):
+        return self.name
+
+    def BuildUpdatedCache(self, request):
+        if request is not music.UIAHandler.handler.baseCacheRequest:
+            raise RuntimeError("Wrong cache request")
+        self.cacheBuilt = True
+        return self
+
+
+def installStubs():
+    for name in ("api", "appModuleHandler", "controlTypes", "core", "keyboardHandler",
+                 "UIAHandler", "ui", "logHandler", "NVDAObjects", "NVDAObjects.UIA", "scriptHandler"):
+        sys.modules[name] = types.ModuleType(name)
+    sys.modules["appModuleHandler"].AppModule = type("AppModule", (), {"terminate": lambda self: None})
+    sys.modules["controlTypes"].Role = types.SimpleNamespace(**{
+        name: name for name in ("LISTITEM", "TABLEROW", "DATAITEM", "POPUPMENU", "MENUITEM", "TREEVIEWITEM", "WINDOW", "BUTTON", "TOGGLEBUTTON", "SPLITBUTTON", "PANE", "GROUPING", "LIST", "DOCUMENT", "TREEVIEW", "EDITABLETEXT", "TOOLBAR", "SLIDER", "DIALOG", "TITLEBAR", "MENUBAR")
+    })
+    sys.modules["controlTypes"].State = types.SimpleNamespace(**{
+        name: name for name in ("INVISIBLE", "OFFSCREEN", "UNAVAILABLE", "CHECKED")
+    })
+    sys.modules["NVDAObjects.UIA"].UIA = Node
+    sys.modules["scriptHandler"].script = lambda **kwargs: lambda function: function
+    sys.modules["logHandler"].log = Mock()
+    location = Path(__file__).resolve().parents[1] / "addon/appModules/applemusic.py"
+    spec = importlib.util.spec_from_file_location("applemusicUnderTest", location)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+music = installStubs()
+
+
+class SuggestLessTests(unittest.TestCase):
+    def setUp(self):
+        self.app = music.AppModule()
+        self.app.processID = 42
+        self.focus = Node("LISTITEM", "Song")
+        self.foreground = Node("WINDOW")
+        self.foreground.windowHandle = 123
+        self.selected = []
+        self.root = types.SimpleNamespace(FindAllBuildCache=lambda *args: types.SimpleNamespace(
+            Length=len(self.selected), GetElement=lambda index: self.selected[index].BuildUpdatedCache(music.UIAHandler.handler.baseCacheRequest),
+        ))
+        self.pending, self.keys, self.messages = [], [], []
+        self.onKey = lambda key: None
+        music.api.getForegroundObject = lambda: self.foreground
+        music.UIAHandler.handler = types.SimpleNamespace(
+            clientObject=types.SimpleNamespace(
+                GetFocusedElement=lambda: self.focus,
+                ElementFromHandleBuildCache=lambda *args: self.root,
+                CreatePropertyCondition=lambda *args: args,
+            ),
+            baseCacheRequest=object(),
+        )
+        music.log.reset_mock()
+        music.UIAHandler.UIA_SelectionItemIsSelectedPropertyId = 30079
+        music.UIAHandler.TreeScope_Descendants = 4
+        music.UIAHandler.UIA_IsKeyboardFocusablePropertyId = 30009
+        music.UIAHandler.ToggleState_Off = 0
+        music.UIAHandler.ToggleState_On = 1
+        music.UIAHandler.UIA_ScrollItemPatternId = 10017
+        music.UIAHandler.IUIAutomationScrollItemPattern = object()
+        music.core.callLater = lambda delay, callback: self.pending.append(callback)
+        music.ui.message = self.messages.append
+
+        def send(key):
+            self.keys.append(key)
+            self.onKey(key)
+
+        music.keyboardHandler.KeyboardInputGesture = types.SimpleNamespace(
+            fromName=lambda key: types.SimpleNamespace(send=lambda: send(key))
+        )
+
+    def tick(self):
+        self.pending.pop(0)()
+
+    def drain(self):
+        for unused in range(2000):
+            if not self.pending:
+                return
+            self.tick()
+        self.fail("Callbacks did not finish")
+
+    def until(self, predicate):
+        for unused in range(2000):
+            if predicate():
+                return
+            self.tick()
+        self.fail("Expected asynchronous result was not reached")
+
+    def start(self):
+        self.app.script_suggestLess(None)
+        self.tick()
+
+    def openMenu(self, *commands):
+        menu = Node("POPUPMENU", children=commands)
+        self.focus = commands[0] if commands else menu
+        return menu
+
+    def test_focused_child_uses_own_row(self):
+        child = Node("BUTTON", "More")
+        row = Node("DATAITEM", children=[child])
+        self.focus = child
+        self.start()
+        self.assertEqual(self.keys, ["shift+f10"])
+        self.assertEqual(self.app._operation["target"], tuple(row.GetRuntimeId()))
+
+    def test_exact_command_invoked_once(self):
+        self.start()
+        command = Node("MENUITEM", "Suggest Less")
+        self.openMenu(command)
+        self.tick()
+        command.UIAInvokePattern.Invoke.assert_called_once_with()
+        self.tick()
+        self.assertEqual(self.messages[-1], "Suggest less.")
+        self.assertIsNone(self.app._operation)
+
+    def test_undo_wins_even_when_both_exposed(self):
+        self.start()
+        command = Node("MENUITEM", "Suggest Less")
+        undo = Node("MENUITEM", "Undo Suggest Less")
+        self.openMenu(command, undo)
+        self.tick()
+        command.UIAInvokePattern.Invoke.assert_not_called()
+        undo.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.messages[-1], "Already set to suggest less.")
+
+    def test_normalization_does_not_turn_undo_into_action(self):
+        self.assertEqual(music.normalizedName(" &Suggest   Less… "), "suggest less")
+        self.assertNotEqual(music.normalizedName("Undo Suggest Less"), "suggest less")
+
+    def test_unrelated_or_hidden_menu_commands_ignored(self):
+        self.start()
+        similar = Node("MENUITEM", "Suggest Less Like This")
+        hidden = Node("MENUITEM", "Suggest Less")
+        hidden.states.add("INVISIBLE")
+        foreign = Node("MENUITEM", "Suggest Less", processID=99)
+        self.openMenu(similar, hidden, foreign)
+        self.app._operation["deadline"] = 0
+        self.tick()
+        for node in (similar, hidden, foreign):
+            node.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.messages[-1], "Suggest Less not available.")
+
+    def test_player_reveals_song_then_restores(self):
+        player = self.focus = Node("BUTTON", "Pause")
+        self.start()
+        self.assertEqual(self.keys, ["control+l"])
+        self.focus = Node("LISTITEM", "Current song")
+        self.tick()
+        command = Node("MENUITEM", "Suggest Less")
+        self.openMenu(command)
+        self.tick()
+        self.tick()
+        player.setFocus.assert_called_once_with()
+        command.UIAInvokePattern.Invoke.assert_called_once_with()
+
+    def test_ctrl_l_timeout_never_uses_stale_selection(self):
+        self.focus = Node("BUTTON", "Play")
+        self.start()
+        self.app._operation["deadline"] = 0
+        self.tick()
+        self.assertEqual(self.keys, ["control+l"])
+        self.assertIn("did not expose the current song", self.messages[-1])
+
+    def test_switching_apps_cancels_without_escape_or_focus_restore(self):
+        player = self.focus = Node("BUTTON", "Pause")
+        self.start()
+        self.foreground = Node("WINDOW", processID=99)
+        self.tick()
+        self.assertEqual(self.keys, ["control+l"])
+        player.setFocus.assert_not_called()
+        self.assertIsNone(self.app._operation)
+
+    def test_inactive_app_ignores_shortcut(self):
+        self.foreground.processID = 99
+        self.app.script_suggestLess(None)
+        self.assertFalse(self.pending or self.keys or self.messages)
+
+    def test_repeated_shortcut_does_not_start_another_operation(self):
+        self.start()
+        self.app.script_suggestLess(None)
+        self.assertEqual(self.keys, ["shift+f10"])
+        self.assertIn("already in progress", self.messages[-1])
+
+    def test_disabled_action_not_invoked(self):
+        self.start()
+        command = Node("MENUITEM", "Suggest Less")
+        command.states.add("UNAVAILABLE")
+        self.openMenu(command)
+        self.tick()
+        command.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertIn("unavailable", self.messages[-1])
+
+    def test_no_invoke_pattern_never_uses_toggle(self):
+        self.start()
+        command = Node("MENUITEM", "Suggest Less")
+        command.UIAInvokePattern = None
+        command.doAction = Mock()
+        self.openMenu(command)
+        self.tick()
+        command.doAction.assert_not_called()
+        self.assertIn("supported action", self.messages[-1])
+
+    def test_multiple_selection_is_rejected(self):
+        container = Node("LIST", children=[self.focus])
+        container.UIASelectionPattern = types.SimpleNamespace(
+            GetCurrentSelection=lambda: types.SimpleNamespace(Length=2)
+        )
+        self.start()
+        self.assertEqual(self.keys, [])
+        self.assertIn("only one", self.messages[-1])
+
+    def test_existing_menu_is_not_repurposed(self):
+        self.openMenu(Node("MENUITEM", "Suggest Less"))
+        self.start()
+        self.assertEqual(self.keys, [])
+        self.assertIn("Close the menu", self.messages[-1])
+
+    def test_changed_focus_before_menu_cancels(self):
+        self.start()
+        self.focus = Node("LISTITEM", "A different song")
+        self.tick()
+        self.assertEqual(self.keys, ["shift+f10"])
+        self.assertIn("focus changed", self.messages[-1])
+
+    def test_duplicate_commands_are_not_guessed(self):
+        self.start()
+        commands = [Node("MENUITEM", "Suggest Less") for unused in range(2)]
+        self.openMenu(*commands)
+        self.tick()
+        for command in commands:
+            command.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertIn("ambiguous", self.messages[-1])
+
+    def test_provider_failure_releases_busy_state(self):
+        self.start()
+        command = Node("MENUITEM", "Suggest Less")
+        command.UIAInvokePattern.Invoke.side_effect = RuntimeError("Stale element")
+        self.openMenu(command)
+        self.tick()
+        self.assertIsNone(self.app._operation)
+        self.assertIn("failed", self.messages[-1])
+
+    def test_termination_invalidates_pending_callback(self):
+        self.app.script_suggestLess(None)
+        self.app.terminate()
+        self.tick()
+        self.assertEqual(self.keys, [])
+
+    def test_missing_uia_focus_explained(self):
+        self.focus = None
+        self.start()
+        self.assertIn("not available through UI Automation", self.messages[-1])
+        self.assertEqual(self.keys, [])
+
+    def test_tree_navigation_item_is_not_a_song(self):
+        self.focus = Node("TREEVIEWITEM", "Library")
+        self.start()
+        self.assertEqual(self.keys, ["control+l"])
+
+    def test_focus_element_is_cached_before_wrapping(self):
+        self.assertFalse(self.focus.cacheBuilt)
+        self.assertIs(self.app._focus(), self.focus)
+        self.assertTrue(self.focus.cacheBuilt)
+
+    def test_initial_focus_failure_does_not_retry_during_cleanup(self):
+        getter = Mock(side_effect=RuntimeError("Invalid parameter"))
+        music.UIAHandler.handler.clientObject.GetFocusedElement = getter
+        self.start()
+        getter.assert_called_once_with()
+        self.assertEqual(self.keys, [])
+        self.assertNotIn("restored", self.messages[-1])
+        music.log.debugWarning.assert_not_called()
+        self.assertIsNone(self.app._operation)
+
+    def test_favorite_labels_invoke_only_favorite(self):
+        for label in ("Favorite", "Favourite", "Add to Favorites", "Add to Favourites"):
+            with self.subTest(label=label):
+                self.setUp()
+                self.app.script_favorite(None)
+                self.tick()
+                favorite = Node("MENUITEM", label)
+                less = Node("MENUITEM", "Suggest Less")
+                self.openMenu(favorite, less)
+                self.tick()
+                self.tick()
+                favorite.UIAInvokePattern.Invoke.assert_called_once_with()
+                less.UIAInvokePattern.Invoke.assert_not_called()
+                self.assertEqual(self.messages[-1], "Added to favorites.")
+
+    def test_remove_favorite_is_never_invoked(self):
+        for label in music.ACTIONS["favorite"]["undo"]:
+            with self.subTest(label=label):
+                self.setUp()
+                self.app.script_favorite(None)
+                self.tick()
+                remove = Node("MENUITEM", label)
+                favorite = Node("MENUITEM", "Favorite")
+                self.openMenu(remove, favorite)
+                self.tick()
+                remove.UIAInvokePattern.Invoke.assert_not_called()
+                favorite.UIAInvokePattern.Invoke.assert_not_called()
+                self.assertEqual(self.messages[-1], "Already a favorite.")
+
+    def test_checked_favorite_is_not_toggled_off(self):
+        self.app.script_favorite(None)
+        self.tick()
+        favorite = Node("MENUITEM", "Favorite")
+        favorite.states.add("CHECKED")
+        self.openMenu(favorite)
+        self.tick()
+        favorite.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.messages[-1], "Already a favorite.")
+
+    def test_favorite_player_route_restores_focus(self):
+        player = self.focus = Node("BUTTON", "Pause")
+        self.app.script_favorite(None)
+        self.tick()
+        self.assertEqual(self.keys, ["control+l"])
+        self.focus = Node("LISTITEM", "Current song")
+        self.tick()
+        favorite = Node("MENUITEM", "Favorite")
+        self.openMenu(favorite)
+        self.tick()
+        self.tick()
+        favorite.UIAInvokePattern.Invoke.assert_called_once_with()
+        player.setFocus.assert_called_once_with()
+
+    def test_two_commands_cannot_overlap(self):
+        self.start()
+        self.app.script_favorite(None)
+        self.assertEqual(self.app._operation["action"], "suggestLess")
+        self.assertEqual(self.keys, ["shift+f10"])
+
+    def test_favorite_missing_does_not_invoke_suggest_less(self):
+        self.app.script_favorite(None)
+        self.tick()
+        less = Node("MENUITEM", "Suggest Less")
+        self.openMenu(less)
+        self.app._operation["deadline"] = 0
+        self.tick()
+        less.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.messages[-1], "Favorite not available.")
+
+    def test_menu_read_failure_does_not_prevent_player_restoration(self):
+        player = self.focus = Node("BUTTON", "Pause")
+        self.start()
+        self.app._operation["openedMenu"] = True
+        music.UIAHandler.handler.clientObject.GetFocusedElement = Mock(side_effect=RuntimeError("Stale menu"))
+        self.app._finish("Failed.")
+        player.setFocus.assert_called_once_with()
+        self.assertIn("menu could not be closed", self.messages[-1])
+        self.assertNotIn("focus could not be restored", self.messages[-1])
+
+    def test_player_more_preferred_to_ctrl_l_for_both_commands(self):
+        for action in ("suggestLess", "favorite"):
+            with self.subTest(action=action):
+                self.setUp()
+                shuffle = self.focus = Node("TOGGLEBUTTON", "Shuffle")
+                more = Node("BUTTON", "More")
+                player = Node("GROUPING", children=[shuffle, Node("BUTTON", "Pause"), more])
+                self.app._begin(action)
+                self.tick()
+                self.until(lambda: more.UIAInvokePattern.Invoke.called)
+                more.UIAInvokePattern.Invoke.assert_called_once_with()
+                self.assertEqual(self.keys, [])
+                command = Node("MENUITEM", "Suggest Less" if action == "suggestLess" else "Favorite")
+                self.openMenu(command)
+                self.tick()
+                self.tick()
+                command.UIAInvokePattern.Invoke.assert_called_once_with()
+                shuffle.setFocus.assert_called_once_with()
+
+    def test_page_more_is_not_mistaken_for_player_more(self):
+        self.focus = Node("TOGGLEBUTTON", "Shuffle")
+        more = Node("BUTTON", "More")
+        root = Node("GROUPING", children=[self.focus, Node("BUTTON", "Pause"), Node("LISTITEM", "Other album", [more])])
+        self.start()
+        self.until(lambda: bool(self.keys))
+        more.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.keys, ["control+l"])
+
+    def test_ambiguous_player_more_uses_fallback(self):
+        self.focus = Node("BUTTON", "Pause")
+        buttons = [Node("BUTTON", "More") for unused in range(2)]
+        player = Node("GROUPING", children=[self.focus, Node("BUTTON", "Shuffle"), *buttons])
+        self.start()
+        self.until(lambda: bool(self.keys))
+        for button in buttons:
+            button.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.keys, ["control+l"])
+
+    def test_new_selection_without_focus_is_focused_before_menu(self):
+        self.focus = Node("BUTTON", "Shuffle")
+        self.start()
+        song = Node("DATAITEM", "Revealed song")
+        self.selected = [song]
+        self.tick()
+        song.setFocus.assert_called_once_with()
+        self.assertEqual(self.keys, ["control+l"])
+        self.focus = song
+        self.tick()
+        self.assertEqual(self.keys, ["control+l", "shift+f10"])
+
+    def test_unchanged_selection_is_never_used_as_current_song(self):
+        self.focus = Node("BUTTON", "Shuffle")
+        old = Node("LISTITEM", "Previously selected song")
+        self.selected = [old]
+        self.start()
+        self.app._operation["deadline"] = 0
+        self.tick()
+        old.setFocus.assert_not_called()
+        self.assertEqual(self.keys, ["control+l"])
+
+    def test_selected_target_focus_failure_never_opens_menu(self):
+        self.focus = Node("BUTTON", "Shuffle")
+        self.start()
+        self.selected = [Node("LISTITEM", "Current song")]
+        self.tick()
+        self.app._operation["deadline"] = 0
+        self.tick()
+        self.assertEqual(self.keys, ["control+l"])
+        self.assertIn("could not focus it", self.messages[-1])
+
+    def test_multiple_new_selections_do_not_pick_arbitrarily(self):
+        self.focus = Node("BUTTON", "Pause")
+        self.start()
+        self.selected = [Node("LISTITEM", "One"), Node("LISTITEM", "Two")]
+        self.app._operation["deadline"] = 0
+        self.tick()
+        self.assertEqual(self.keys, ["control+l"])
+        for song in self.selected:
+            song.setFocus.assert_not_called()
+
+    def navigationFixture(self):
+        self.search = Node("EDITABLETEXT", "Search")
+        self.sidebar = Node("TREEVIEWITEM", "Home")
+        self.player = Node("BUTTON", "Pause")
+        self.song = Node("DATAITEM", "Song")
+        self.selected = [self.search, self.sidebar, self.player, self.song]
+        for node in self.selected:
+            node.setFocus.side_effect = lambda node=node: setattr(self, "focus", node)
+
+    def test_f6_cycles_sections_and_wraps(self):
+        self.navigationFixture()
+        self.focus = self.search
+        for expected, label in ((self.sidebar, "Sidebar"), (self.player, "Player"), (self.song, "Main content"), (self.search, "Search")):
+            self.app.script_nextSection(None)
+            self.drain()
+            self.assertIs(self.focus, expected)
+            self.assertEqual(self.messages[-1], label)
+            expected.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.keys, [])
+
+    def test_shift_f6_cycles_backwards(self):
+        self.navigationFixture()
+        self.focus = self.search
+        self.app.script_previousSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.song)
+
+    def test_navigation_remembers_previous_control_in_section(self):
+        self.navigationFixture()
+        nextButton = Node("BUTTON", "Next")
+        nextButton.setFocus.side_effect = lambda: setattr(self, "focus", nextButton)
+        self.selected.append(nextButton)
+        self.focus = nextButton
+        self.app.script_nextSection(None)
+        self.drain()
+        self.app.script_previousSection(None)
+        self.drain()
+        self.assertIs(self.focus, nextButton)
+
+    def test_navigation_skips_hidden_sections(self):
+        self.navigationFixture()
+        self.sidebar.states.add("OFFSCREEN")
+        self.focus = self.search
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.player)
+
+    def test_navigation_preserves_open_menu(self):
+        self.navigationFixture()
+        self.openMenu(Node("MENUITEM", "Favorite"))
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIn("Close the menu", self.messages[-1])
+        self.assertEqual(self.keys, [])
+
+    def test_navigation_does_not_interrupt_preference(self):
+        self.start()
+        self.app.script_nextSection(None)
+        self.assertIn("Wait", self.messages[-1])
+        self.assertIsNotNone(self.app._operation)
+
+    def test_navigation_explains_focus_failure(self):
+        self.navigationFixture()
+        self.sidebar.setFocus.side_effect = None
+        self.focus = self.search
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIn("could not focus sidebar", self.messages[-1])
+
+    def test_queue_and_lyrics_panel_classification(self):
+        for name, expected in (("Playing Next", "Queue"), ("Lyrics", "Lyrics")):
+            with self.subTest(name=name):
+                item = Node("LISTITEM", "Line or song")
+                container = Node("PANE", name, [item])
+                self.assertEqual(music.sectionFor(item, 42), expected)
+
+    def test_null_selection_array_is_empty(self):
+        self.app._operation = {"root": types.SimpleNamespace(FindAllBuildCache=lambda *args: None)}
+        self.assertEqual(self.app._selectedItems(), {})
+
+    def test_focused_action_opens_menu_without_player_scan(self):
+        for action in ("suggestLess", "favorite"):
+            with self.subTest(action=action):
+                self.setUp()
+                button = self.focus = Node("BUTTON", "Action")
+                self.app._begin(action)
+                self.tick()
+                button.UIAInvokePattern.Invoke.assert_called_once_with()
+                self.assertNotIn("playerSearch", self.app._operation)
+                self.assertEqual(self.keys, [])
+                command = Node("MENUITEM", "Suggest Less" if action == "suggestLess" else "Favorite")
+                self.openMenu(command)
+                self.tick()
+                self.tick()
+                command.UIAInvokePattern.Invoke.assert_called_once_with()
+                button.setFocus.assert_called_once_with()
+
+    def test_navigation_skips_track_wrapper_and_position_slider(self):
+        self.navigationFixture()
+        action = Node("BUTTON", "Action")
+        action.setFocus.side_effect = lambda: setattr(self, "focus", action)
+        wrapper = Node("GROUPING", "Track Artist — Album", [action])
+        self.selected = [self.search, self.sidebar, self.player, wrapper, action, Node("SLIDER"), self.song]
+        self.focus = action
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.song)
+        wrapper.setFocus.assert_not_called()
+
+    def test_navigation_yields_before_scanning(self):
+        self.navigationFixture()
+        self.focus = self.search
+        self.app.script_nextSection(None)
+        self.assertIs(self.focus, self.search)
+        self.assertTrue(self.pending)
+        self.drain()
+        self.assertIs(self.focus, self.sidebar)
+
+    def test_new_navigation_request_reuses_scan_and_changes_direction(self):
+        self.navigationFixture()
+        self.focus = self.search
+        self.app.script_nextSection(None)
+        generation = self.app._navigationGeneration
+        self.app.script_previousSection(None)
+        self.assertEqual(self.app._navigationGeneration, generation)
+        self.drain()
+        self.assertIs(self.focus, self.song)
+        self.sidebar.setFocus.assert_not_called()
+        self.assertEqual(self.messages, ["Main content"])
+
+    def test_navigation_does_not_steal_changed_focus(self):
+        self.navigationFixture()
+        self.focus = self.search
+        self.app.script_nextSection(None)
+        self.focus = self.player
+        self.drain()
+        self.assertIs(self.focus, self.player)
+        self.assertEqual(self.messages, [])
+
+    def test_checkable_preferences_without_invoke_are_set_once(self):
+        for action, label in (("suggestLess", "Suggest Less"), ("favorite", "Favourite")):
+            with self.subTest(action=action):
+                self.setUp()
+                self.app._begin(action)
+                self.tick()
+                command = Node("MENUITEM", label)
+                command.UIAInvokePattern = None
+                command.UIATogglePattern = Mock(CurrentToggleState=0)
+                self.openMenu(command)
+                self.tick()
+                self.tick()
+                command.UIATogglePattern.Toggle.assert_called_once_with()
+                self.assertEqual(self.messages[-1], music.ACTIONS[action]["success"])
+
+    def test_live_checked_state_wins_over_stale_unchecked_state(self):
+        for action, label in (("suggestLess", "Suggest Less"), ("favorite", "Favourite")):
+            with self.subTest(action=action):
+                self.setUp()
+                self.app._begin(action)
+                self.tick()
+                command = Node("MENUITEM", label)
+                command.UIATogglePattern = Mock(CurrentToggleState=1)
+                self.openMenu(command)
+                self.tick()
+                command.UIATogglePattern.Toggle.assert_not_called()
+                command.UIAInvokePattern.Invoke.assert_not_called()
+                self.assertEqual(self.messages[-1], music.ACTIONS[action]["already"])
+
+    def test_indeterminate_toggle_state_is_not_changed(self):
+        self.start()
+        command = Node("MENUITEM", "Suggest Less")
+        command.UIATogglePattern = Mock(CurrentToggleState=2)
+        self.openMenu(command)
+        self.tick()
+        command.UIATogglePattern.Toggle.assert_not_called()
+        self.assertIn("uncertain checked state", self.messages[-1])
+
+    def test_f6_stops_after_finding_next_section(self):
+        self.navigationFixture()
+        self.focus = self.search
+        self.selected.extend(Node("LISTITEM", str(index)) for index in range(800))
+        originalGet = self.root.FindAllBuildCache
+        calls = []
+        def read(*args):
+            result = originalGet(*args)
+            originalElement = result.GetElement
+            result.GetElement = lambda index: (calls.append(index), originalElement(index))[1]
+            return result
+        self.root.FindAllBuildCache = read
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.sidebar)
+        self.assertLess(len(calls), 5)
+
+    def test_open_navigation_is_sidebar_not_main_content(self):
+        self.navigationFixture()
+        opener = Node("BUTTON", "Open Navigation")
+        opener.setFocus.side_effect = lambda: setattr(self, "focus", opener)
+        self.selected = [opener, self.search, self.player, self.song]
+        self.focus = self.player
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.song)
+        opener.setFocus.assert_not_called()
+        self.app.script_previousSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.player)
+        self.app.script_previousSection(None)
+        self.drain()
+        self.assertIs(self.focus, opener)
+        self.assertEqual(self.messages[-1], "Sidebar")
+
+    def test_rapid_f6_does_not_restart_scan(self):
+        self.navigationFixture()
+        self.focus = self.player
+        # Make Main content occur beyond several batches, like the real Home page.
+        self.selected = [Node("BUTTON", "Open Navigation"), self.search] + [Node("BUTTON", "Pause") for unused in range(80)] + [self.song]
+        reads = Mock(wraps=self.root.FindAllBuildCache)
+        self.root.FindAllBuildCache = reads
+        self.app.script_nextSection(None)
+        generation = self.app._navigationGeneration
+        for unused in range(8):
+            self.tick()
+            self.app.script_nextSection(None)
+            self.assertEqual(self.app._navigationGeneration, generation)
+        self.drain()
+        self.assertIs(self.focus, self.song)
+        reads.assert_called_once()
+
+    def test_live_search_button_name_and_identifier(self):
+        self.assertEqual(music.sectionFor(Node("BUTTON", "Click to search"), 42), "Search")
+        button = Node("BUTTON", "Localized search")
+        button.cachedAutomationId = "Search_Button"
+        self.assertEqual(music.sectionFor(button, 42), "Search")
+
+    def test_winui_sidebar_listitems_are_not_page_content(self):
+        self.navigationFixture()
+        home = Node("LISTITEM", "Home")
+        home.cachedAutomationId = "Sidebar_Home"
+        home.cachedClassName = "Microsoft.UI.Xaml.Controls.NavigationViewItem"
+        home.setFocus.side_effect = lambda: setattr(self, "focus", home)
+        self.selected = [self.search, home, self.player, self.song]
+        self.focus = self.player
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.song)
+        self.assertIsNone(music.focusedItem(home, 42))
+        self.app.script_previousSection(None)
+        self.drain()
+        self.app.script_previousSection(None)
+        self.drain()
+        self.assertIs(self.focus, home)
+        self.assertEqual(self.messages[-1], "Sidebar")
+
+    def test_unlabelled_navigation_entry_uses_winui_class(self):
+        item = Node("LISTITEM", "Custom playlist")
+        item.cachedClassName = "Microsoft.UI.Xaml.Controls.NavigationViewItem"
+        self.assertEqual(music.sectionFor(item, 42), "Sidebar")
+        self.assertIsNone(music.focusedItem(item, 42))
+
+    def test_player_auxiliary_controls_do_not_become_main_content(self):
+        for role, name in (("BUTTON", "Lossless"), ("BUTTON", "Favourite"), ("TOGGLEBUTTON", "Queue"), ("SLIDER", "")):
+            with self.subTest(role=role, name=name):
+                self.assertEqual(music.sectionFor(Node(role, name), 42), "Player")
+
+    def test_repeat_button_uses_identity_across_state_labels(self):
+        for name in ("Do Not Repeat", "Repeat All", "Repeat One"):
+            button = Node("BUTTON", name)
+            button.cachedAutomationId = "RepeatButton"
+            self.assertEqual(music.sectionFor(button, 42), "Player")
+
+    def test_player_identifiers_and_open_panel_are_distinct(self):
+        for identifier in music.PLAYER_IDS:
+            button = Node("BUTTON", "Localized label")
+            button.cachedAutomationId = identifier
+            self.assertEqual(music.sectionFor(button, 42), "Player")
+        panel = Node("PANE", "Queue")
+        item = Node("LISTITEM", "Queued song")
+        item.parent = panel
+        self.assertEqual(music.sectionFor(item, 42), "Queue")
+
+    def test_queue_panel_tabs_are_separate_from_player_opener(self):
+        for name in ("Playing Next", "History"):
+            self.assertEqual(music.sectionFor(Node("TOGGLEBUTTON", name), 42), "Queue")
+        self.assertEqual(music.sectionFor(Node("TOGGLEBUTTON", "Queue"), 42), "Player")
+
+    def test_favorite_from_queue_finds_verified_player_action(self):
+        self.focus = Node("TOGGLEBUTTON", "History")
+        action = Node("BUTTON", "Action")
+        action.cachedAutomationId = "ActionButton"
+        pause = Node("BUTTON", "Pause")
+        pause.cachedAutomationId = "TransportControl_PlayPauseStop"
+        shuffle = Node("TOGGLEBUTTON", "Shuffle")
+        shuffle.cachedAutomationId = "ShuffleButton"
+        airplay = Node("BUTTON", "AirPlay")
+        airplay.cachedAutomationId = "AirPlayButton"
+        self.selected = [action, pause, shuffle, airplay]
+        self.app._begin("favorite")
+        self.until(lambda: action.UIAInvokePattern.Invoke.called)
+        self.assertNotIn("control+l", self.keys)
+        airplay.UIAInvokePattern.Invoke.assert_not_called()
+        command = Node("MENUITEM", "Favourite")
+        command.UIATogglePattern = Mock(CurrentToggleState=0)
+        self.openMenu(command)
+        self.drain()
+        command.UIATogglePattern.Toggle.assert_called_once()
+
+    def test_identified_player_lookup_rejects_row_action_and_duplicates(self):
+        for duplicate in (False, True):
+            self.setUp()
+            self.focus = Node("TOGGLEBUTTON", "History")
+            action = Node("BUTTON", "Action")
+            action.cachedAutomationId = "ActionButton"
+            pause = Node("BUTTON", "Pause")
+            pause.cachedAutomationId = "TransportControl_PlayPauseStop"
+            repeat = Node("BUTTON", "Do Not Repeat")
+            repeat.cachedAutomationId = "RepeatButton"
+            self.selected = [action, pause, repeat]
+            if duplicate:
+                other = Node("BUTTON", "Action")
+                other.cachedAutomationId = "ActionButton"
+                self.selected.append(other)
+            else:
+                action.parent = Node("LISTITEM", "Unrelated song")
+            self.start()
+            self.until(lambda: "control+l" in self.keys)
+            action.UIAInvokePattern.Invoke.assert_not_called()
+
+    def trackFixture(self):
+        self.track = Node("LISTITEM", "Track 1 Example song Artist Album 3 minutes")
+        self.trackList = Node("LIST", children=[self.track])
+        self.content = Node("GROUPING", "Content", children=[self.trackList])
+        self.content.cachedClassName = "LandmarkTarget"
+        self.track.setFocus.side_effect = lambda: setattr(self, "focus", self.track)
+        self.selected = [self.track]
+
+    def test_enter_on_track_uses_named_play_menu(self):
+        self.trackFixture()
+        self.focus = self.track
+        gesture = Mock()
+        self.app.script_playTrack(gesture)
+        self.tick()
+        self.assertEqual(self.keys, ["shift+f10"])
+        command = Node("MENUITEM", "Play")
+        self.openMenu(command)
+        self.drain()
+        command.UIAInvokePattern.Invoke.assert_called_once()
+        gesture.send.assert_not_called()
+
+    def test_enter_on_other_control_passes_through(self):
+        self.focus = Node("BUTTON", "Filter")
+        gesture = Mock()
+        self.app.script_playTrack(gesture)
+        gesture.send.assert_called_once()
+        self.assertIsNone(self.app._operation)
+
+    def test_new_content_focus_moves_into_track_list(self):
+        self.trackFixture()
+        self.focus = Node("BUTTON", "Playlist heading")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.assertIs(self.focus, self.track)
+
+    def test_existing_page_does_not_pull_focus_back(self):
+        self.trackFixture()
+        self.app._trackPage = tuple(self.trackList.GetRuntimeId())
+        self.focus = Node("BUTTON", "Filter")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.track.setFocus.assert_not_called()
+
+    def test_track_focus_poll_cancels_after_user_moves(self):
+        self.trackFixture()
+        self.focus = Node("BUTTON", "Playlist heading")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.focus = Node("BUTTON", "Volume")
+        self.drain()
+        self.track.setFocus.assert_not_called()
+
+    def test_manual_section_destination_is_not_overridden(self):
+        self.trackFixture()
+        self.focus = Node("BUTTON", "Open Navigation")
+        self.app._manualSectionTarget = tuple(self.focus.GetRuntimeId())
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.track.setFocus.assert_not_called()
+
+    def test_content_play_button_is_not_player(self):
+        button = Node("BUTTON", "Play")
+        content = Node("GROUPING", "Content", children=[button])
+        content.cachedClassName = "LandmarkTarget"
+        self.assertEqual(music.sectionFor(button, 42), "Main content")
+
+    def test_f6_prefers_track_over_playlist_header_controls(self):
+        self.trackFixture()
+        self.focus = Node("BUTTON", "Pause")
+        header = Node("BUTTON", "Filter")
+        self.selected = [header, self.track]
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.track)
+
+    def test_quoted_play_command_excludes_play_next(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_playTrack(Mock())
+        self.tick()
+        play = Node("MENUITEM", 'Play \u201cExample song\u201d')
+        nextPlay = Node("MENUITEM", "Play Next")
+        self.openMenu(play, nextPlay)
+        self.drain()
+        play.UIAInvokePattern.Invoke.assert_called_once()
+        nextPlay.UIAInvokePattern.Invoke.assert_not_called()
+
+    def test_scroll_before_track_menu_and_cancel_if_focus_changes(self):
+        self.trackFixture()
+        self.focus = self.track
+        scroll = Mock()
+        self.track._getUIAPattern.return_value = scroll
+        self.app.script_playTrack(Mock())
+        self.tick()
+        scroll.ScrollIntoView.assert_called_once()
+        self.assertEqual(self.keys, [])
+        self.focus = Node("BUTTON", "Volume")
+        self.drain()
+        self.assertEqual(self.keys, [])
+
+    def test_play_waits_for_popup_window_to_expose_menu(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_playTrack(Mock())
+        self.tick()
+        self.focus = Node("WINDOW", "Pop-up")
+        self.tick()
+        self.assertIsNotNone(self.app._operation)
+        command = Node("MENUITEM", 'Play "Example song"')
+        self.openMenu(command)
+        self.drain()
+        command.UIAInvokePattern.Invoke.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

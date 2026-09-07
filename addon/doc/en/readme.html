@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Apple Music</title></head>
+<body>
+<h1>Apple Music</h1>
+<p>In Apple Music for Windows, press <strong>Control+Alt+Down Arrow</strong>
+to suggest less of the song or album containing keyboard focus.</p>
+<p>Press <strong>Control+Alt+Up Arrow</strong> to favorite that item instead.
+Both commands use the current-song route when focus is in player controls.</p>
+<h2>Using the player</h2>
+<p>A focused Action/More button is used directly. Apple Music exposes its player
+More button to NVDA as “Action.” From other player controls, the add-on looks for
+an Action/More button grouped with
+transport controls. If it cannot identify one, it sends Control+L to reveal the
+current song. A newly selected song is focused before opening its context menu.
+The requested command is invoked by its accessible name.
+It attempts to restore your original focus afterward. Keep focus in place until
+you hear the result. If neither route exposes a target, the operation stops.</p>
+<h2>Moving between sections</h2>
+<p>Press <strong>F6</strong> for the next section and <strong>Shift+F6</strong>
+for the previous section. The order is Search, Sidebar, Player, Main content,
+Queue, Lyrics, then back to the first available section. Hidden sections are skipped.
+The last control left with F6 is remembered for each section. Use Tab and arrow
+keys within sections. Switching sections changes focus without activating controls.</p>
+<p>Close menus and dialogs before switching sections. Detection uses English
+accessible names and roles. Queue and Lyrics need named accessible containers;
+unsupported controls are grouped into Main content.</p>
+<h2>Album and playlist tracks</h2>
+<p>A newly exposed track list receives focus after navigation. The add-on scrolls
+the track into view and remembers the list so subsequent focus moves are respected.
+F6 prefers tracks over album and playlist header controls. The selected row may
+be used instead of the first track.</p>
+<p>Press <strong>Enter</strong> or <strong>Numpad Enter</strong> on a track to play
+it through the menu command Play or Play followed by the quoted song title.
+Play Next and Play Last are never selected. Enter on other controls works normally.</p>
+<p>Track recognition uses English numbered names such as Track 1.
+Pages that reuse a list without a focus event and unexposed virtual rows can
+require manual navigation. Moving focus elsewhere cancels a pending automatic move.</p>
+<h2>Feedback</h2>
+<p>NVDA announces “Suggest less” when the accessibility action succeeds. This does not
+independently verify that Apple's server saved the preference.
+If the menu contains Undo Suggest Less, NVDA says “Already set to suggest less”
+and leaves the preference unchanged. Unavailable actions produce an explanation.</p>
+<p>The Favorite command announces “Added to favorites” after the accessibility action.
+If it finds a removal command or a checked Favorite item, it says “Already a favorite”
+without removing the favorite. American and British English menu names are supported.</p>
+<p>Checkable menu items use Toggle only when their current state is explicitly
+off. Already checked or indeterminate items are never toggled. Invoke is used
+for commands that expose it without Toggle.</p>
+<h2>Changing the shortcut</h2>
+<p>With Apple Music active, open NVDA Preferences, Input gestures, and find the
+command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
+<h2>Requirements and limitations</h2>
+<p>This version targets NVDA 2025.1 through 2026.1 and English Apple Music
+menu labels. No AutoHotkey or external UI Automation library is needed.
+The preview passes 76 simulated-control tests. Live playlist focus and Enter playback
+were verified; full album transitions and open Queue/Lyrics cycling still need testing.</p>
+<p>Preference commands need a focused UIA row/card, a recognizable player More
+button, or a song newly focused or selected by Control+L. An old selection is
+never assumed to be the current song. Unsupported layouts may require manual
+navigation. Multiple selections reported by UIA are refused. Changing applications
+cancels pending work. A disappeared control cannot have focus restored.</p>
+<h2>Updating</h2>
+<p>Version 0.4.0 adds track-list focus and Enter playback. It recognizes the player's Repeat and Queue controls by their
+stable identifiers, keeping them out of Main content. It recognizes sidebar list items using the WinUI NavigationViewItem
+class and Sidebar automation IDs, so Home is no longer labelled Main content.
+Click to search and player audio-quality controls are also classified correctly.
+Rapid F6 and Shift+F6 presses share one scan; the latest direction wins.
+Queue's Playing Next and History tabs are recognized. Queue and Lyrics content appear as separate sections when their named accessible panels
+are open. F6 does not automatically open closed panels.
+Install this package over the earlier version and restart NVDA.</p>
+<h2>License and source</h2>
+<p>Copyright 2026 serrebidev. GNU General Public License version 2 or later.
+The package includes LICENSE and Python source in appModules/applemusic.py.</p>
+</body>
+</html>
