@@ -91,6 +91,10 @@ class SuggestLessTests(unittest.TestCase):
         self.root = types.SimpleNamespace(FindAllBuildCache=lambda *args: types.SimpleNamespace(
             Length=len(self.selected), GetElement=lambda index: self.selected[index].BuildUpdatedCache(music.UIAHandler.handler.baseCacheRequest),
         ))
+        self.root.FindFirstBuildCache = lambda scope, condition, cache: next((
+            obj.BuildUpdatedCache(cache) for obj in self.selected
+            if obj.cachedAutomationId == condition[1]
+        ), None)
         self.pending, self.keys, self.messages = [], [], []
         self.onKey = lambda key: None
         music.api.getForegroundObject = lambda: self.foreground
@@ -99,6 +103,8 @@ class SuggestLessTests(unittest.TestCase):
                 GetFocusedElement=lambda: self.focus,
                 ElementFromHandleBuildCache=lambda *args: self.root,
                 CreatePropertyCondition=lambda *args: args,
+                CreateOrCondition=lambda *args: args,
+                CreateAndCondition=lambda *args: args,
             ),
             baseCacheRequest=object(),
         )
@@ -106,6 +112,10 @@ class SuggestLessTests(unittest.TestCase):
         music.UIAHandler.UIA_SelectionItemIsSelectedPropertyId = 30079
         music.UIAHandler.TreeScope_Descendants = 4
         music.UIAHandler.UIA_IsKeyboardFocusablePropertyId = 30009
+        music.UIAHandler.UIA_AutomationIdPropertyId = 30011
+        music.UIAHandler.UIA_ControlTypePropertyId = 30003
+        music.UIAHandler.UIA_ListItemControlTypeId = 50007
+        music.UIAHandler.UIA_DataItemControlTypeId = 50029
         music.UIAHandler.ToggleState_Off = 0
         music.UIAHandler.ToggleState_On = 1
         music.UIAHandler.UIA_ScrollItemPatternId = 10017
@@ -710,7 +720,8 @@ class SuggestLessTests(unittest.TestCase):
             self.assertEqual(self.app._navigationGeneration, generation)
         self.drain()
         self.assertIs(self.focus, self.song)
-        reads.assert_called_once()
+        # One track-only probe and one fallback scan, shared by every repeat.
+        self.assertEqual(reads.call_count, 2)
 
     def test_live_search_button_name_and_identifier(self):
         self.assertEqual(music.sectionFor(Node("BUTTON", "Click to search"), 42), "Search")
@@ -845,6 +856,69 @@ class SuggestLessTests(unittest.TestCase):
         self.app.event_gainFocus(self.focus, Mock())
         self.drain()
         self.assertIs(self.focus, self.track)
+
+    def test_track_focus_handles_more_than_1000_controls(self):
+        self.trackFixture()
+        self.selected = [Node("BUTTON", "Header") for _ in range(1100)] + [self.track]
+        self.focus = Node("BUTTON", "Playlist heading")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.assertIs(self.focus, self.track)
+
+    def test_playlist_track_without_number_receives_focus(self):
+        self.trackFixture()
+        self.track.name = "Without You Here 3 minutes, 49 seconds"
+        self.focus = Node("BUTTON", "Playlist heading")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.assertIs(self.focus, self.track)
+
+    def test_duration_in_sidebar_name_is_not_a_track(self):
+        sidebar = Node("LISTITEM", "My playlist 3 minutes, 49 seconds")
+        sidebar.cachedAutomationId = "Sidebar_Playlist"
+        self.assertIsNone(music.trackRow(sidebar, 42))
+
+    def test_track_below_fold_is_revealed_and_focused(self):
+        self.trackFixture()
+        self.track.states.add("OFFSCREEN")
+        self.track._getUIAPattern.return_value = Mock()
+        self.focus = Node("BUTTON", "Album heading")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.track._getUIAPattern.return_value.ScrollIntoView.assert_called_once()
+        self.assertIs(self.focus, self.track)
+
+    def test_reused_list_with_new_tracks_receives_focus(self):
+        self.trackFixture()
+        self.app._trackPage = tuple(self.trackList.GetRuntimeId())
+        self.app._trackPageName = "track 1 previous album song"
+        self.focus = Node("BUTTON", "New album heading")
+        self.app.event_gainFocus(self.focus, Mock())
+        self.drain()
+        self.assertIs(self.focus, self.track)
+
+    def test_f6_known_player_id_avoids_global_scan(self):
+        self.focus = Node("BUTTON", "Open Navigation")
+        player = Node("BUTTON", "Pause")
+        player.cachedAutomationId = "TransportControl_PlayPauseStop"
+        player.setFocus.side_effect = lambda: setattr(self, "focus", player)
+        self.selected = [player]
+        self.root.FindAllBuildCache = Mock(side_effect=AssertionError("Global scan"))
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, player)
+        self.root.FindAllBuildCache.assert_not_called()
+
+    def test_f6_remembered_target_is_refreshed_without_global_scan(self):
+        self.navigationFixture()
+        self.focus = self.search
+        self.app.script_nextSection(None)
+        self.drain()
+        self.root.FindAllBuildCache = Mock(side_effect=AssertionError("Global scan"))
+        self.app.script_previousSection(None)
+        self.drain()
+        self.assertIs(self.focus, self.search)
+        self.root.FindAllBuildCache.assert_not_called()
 
     def test_existing_page_does_not_pull_focus_back(self):
         self.trackFixture()

@@ -24,6 +24,8 @@ Press **F6** for the next section or **Shift+F6** for the previous section.
 The order is Search, Sidebar, Player, Main content, Queue, Lyrics, then back to
 the first available section. Hidden or unavailable sections are skipped.
 The add-on remembers the last control left in each section when you use F6.
+Known controls and remembered destinations are queried directly. Fallback
+discovery shares parent classifications to reduce repeated accessibility calls.
 It changes keyboard focus without activating buttons, starting playback, or
 selecting a new sidebar page. Use Tab or the arrow keys within a section.
 
@@ -38,7 +40,8 @@ under Apple Music in NVDA's Input gestures dialog.
 
 When a newly exposed track list receives attention after navigation, the add-on
 focuses a track and scrolls it into view. It recognizes Apple's English numbered
-row names such as “Track 1 …”. It will not repeatedly pull you back to the same
+album rows and playlist rows ending with a spoken duration, such as
+“Without You Here 3 minutes, 49 seconds”. It will not repeatedly pull you back to the same
 list when you move to its header controls. Moving focus elsewhere cancels a
 pending automatic move. F6's Main content destination prefers available track
 rows over album/playlist header controls.
@@ -54,14 +57,14 @@ non-English track names, and unexposed virtual rows can require manual navigatio
 
 ## Installation and use
 
-1. Run `python build.py`, or use the supplied file in `dist`.
-2. Open `AppleMusic-0.4.0.nvda-addon` and confirm NVDA's installation prompt.
+1. Download the add-on from [GitHub releases](https://github.com/serrebidev/AppleMusicNVDA/releases/latest), or run `python build.py` to build it in `dist`.
+2. Open `AppleMusic-0.4.1.nvda-addon` and confirm NVDA's installation prompt.
 3. Restart NVDA when prompted.
 4. In Apple Music, focus one song/album or a player control and press
    **Control+Alt+Down Arrow** for Suggest Less or **Control+Alt+Up Arrow** for
    Favorite. Keep focus in place until feedback is spoken.
 
-Installing 0.4.0 upgrades the existing add-on. The display name is Apple Music;
+Installing 0.4.1 upgrades the existing add-on. The display name is Apple Music;
 the internal ID remains `appleMusicSuggestLess` to preserve the upgrade path.
 
 NVDA says “Suggest less” or “Added to favorites” after UI Automation accepts the action. This
@@ -99,13 +102,20 @@ scoped to AppleMusic.exe; it is not intercepted in other applications.
   the same small transport container. It rejects content rows and sidebar
   tree items. No screen coordinates or positional menu navigation are used.
 - Compatibility metadata targets NVDA 2025.1 through 2026.1. It is not a claim
-  of live testing on every release. The preview has 76 automated mock tests and
+  of live testing on every release. This version has 83 automated mock tests and
   the live checks described below.
 
 ## Verification
 
 Run `python -m unittest discover -s tests -v` and `python build.py`.
 The build validates archive contents and produces a SHA-256 checksum alongside it.
+
+Version 0.4.1 live checks on Apple Music 1.1540.23042.0 confirmed that clicking
+Deep Blue focuses its first album track and clicking Get Up! focuses its first
+playlist track. NVDA developer information confirmed keyboard focus on both rows.
+Album-page F6 focus requests measured 0.221 seconds to Player, 0.303 seconds to
+Main content, and 0.579 seconds for wraparound to Search. These timings end at
+the focus request and exclude speech completion; they are not performance guarantees.
 
 Live checks completed for this development series: forward/reverse Home-page
 section cycling and wraparound; playlist track focus; Enter starting the focused
@@ -129,6 +139,16 @@ Live test checklist:
    favorite is added, then press it again and confirm the favorite remains set.
 9. Test F6 and Shift+F6 from Search, Sidebar, Player and content. Verify wrapping,
    remembered controls, hidden panels, and navigation with Queue or Lyrics open.
+
+## Changes in 0.4.1
+
+- Uses direct control lookup and refreshed remembered controls for faster F6.
+- Shares ancestor information during fallback section discovery.
+- Removes the 1,000-control limit and stops track classification after one usable row.
+- Recognizes playlist tracks without a “Track 1” prefix and reveals offscreen rows.
+- Detects changed first-track names when a page reuses its list control.
+- Checks for arriving tracks sooner while allowing up to four seconds for loading.
+- 83 automated tests pass; album and playlist click focus verified live.
 
 ## Changes in 0.4.0
 

@@ -22,6 +22,8 @@ for the previous section. The order is Search, Sidebar, Player, Main content,
 Queue, Lyrics, then back to the first available section. Hidden sections are skipped.
 The last control left with F6 is remembered for each section. Use Tab and arrow
 keys within sections. Switching sections changes focus without activating controls.</p>
+<p>Known and remembered controls are queried directly for faster F6 navigation.
+Fallback discovery reuses parent information instead of repeatedly reading it.</p>
 <p>Close menus and dialogs before switching sections. Detection uses English
 accessible names and roles. Queue and Lyrics need named accessible containers;
 unsupported controls are grouped into Main content.</p>
@@ -33,7 +35,9 @@ be used instead of the first track.</p>
 <p>Press <strong>Enter</strong> or <strong>Numpad Enter</strong> on a track to play
 it through the menu command Play or Play followed by the quoted song title.
 Play Next and Play Last are never selected. Enter on other controls works normally.</p>
-<p>Track recognition uses English numbered names such as Track 1.
+<p>Track recognition uses English numbered album names such as Track 1 and playlist
+rows ending with a duration, such as 3 minutes, 49 seconds. Tracks below the visible
+header are scrolled into view. Large pages with over 1,000 controls are supported.
 Pages that reuse a list without a focus event and unexposed virtual rows can
 require manual navigation. Moving focus elsewhere cancels a pending automatic move.</p>
 <h2>Feedback</h2>

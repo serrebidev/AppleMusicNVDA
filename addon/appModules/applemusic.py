@@ -124,13 +124,20 @@ def sectionFor(obj, processID, lineage=None):
 	return "Main content"
 
 
+def isTrackName(name):
+	name = normalizedName(name)
+	return bool(re.match(r"^track\s+\d+\b", name) or re.search(
+		r"\S.+\s\d+\s+(?:hours?|minutes?|seconds?)(?:,?\s+\d+\s+(?:minutes?|seconds?))*$", name,
+	))
+
+
 def trackRow(obj, processID):
-	"""Identify Apple's numbered song rows, excluding cards/sidebar entries."""
+	"""Identify numbered album rows and duration-labelled playlist rows."""
 	for candidate in ancestors(obj):
 		if candidate.processID != processID or candidate.role in MENU_ROLES:
 			return None
 		if candidate.role in ITEM_ROLES:
-			if not isSidebarItem(candidate) and re.match(r"^track\s+\d+\b", normalizedName(candidate.name)):
+			if not isSidebarItem(candidate) and isTrackName(candidate.name):
 				return candidate
 			return None
 	return None
@@ -229,17 +236,28 @@ def normalizedName(name):
 	return " ".join((name or "").replace("&", "").split()).rstrip(".\u2026").strip().casefold()
 
 
-def ancestors(obj):
+def ancestors(obj, cache=None):
 	seen = set()
+	visited = []
 	for unused in range(24):
 		if obj is None:
-			return
+			break
 		key = tuple(obj.UIAElement.GetRuntimeId()) if isinstance(obj, UIA) else id(obj)
 		if key in seen:
-			return
+			break
 		seen.add(key)
+		if cache is not None and key in cache:
+			for parent in cache[key]:
+				yield parent
+			visited.extend(cache[key])
+			break
+		visited.append(obj)
 		yield obj
 		obj = obj.parent
+	if cache is not None:
+		for index, parent in enumerate(visited):
+			key = tuple(parent.UIAElement.GetRuntimeId()) if isinstance(parent, UIA) else id(parent)
+			cache[key] = visited[index:]
 
 
 def focusedItem(obj, processID):
@@ -304,21 +322,36 @@ class AppModule(appModuleHandler.AppModule):
 	_trackFocusGeneration = 0
 	_trackPage = None
 
-	def _trackRows(self):
+	def _trackRows(self, root=None):
+		"""Only one row is needed; do not wrap/classify every song on the page."""
 		client = UIAHandler.handler.clientObject
-		root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
-		condition = client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True)
+		if root is None:
+			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+		condition = client.CreateAndCondition(
+			client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True),
+			client.CreateOrCondition(
+				client.CreatePropertyCondition(UIAHandler.UIA_ControlTypePropertyId, UIAHandler.UIA_ListItemControlTypeId),
+				client.CreatePropertyCondition(UIAHandler.UIA_ControlTypePropertyId, UIAHandler.UIA_DataItemControlTypeId),
+			),
+		)
 		elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
 		rows = []
-		if elements and elements.Length <= 1000:
+		if elements:
 			for index in range(elements.Length):
 				element = elements.GetElement(index)
-				if not re.match(r"^track\s+\d+\b", normalizedName(element.cachedName)):
+				if not isTrackName(element.cachedName):
 					continue
 				obj = UIA(UIAElement=element)
-				if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} and trackRow(obj, self.processID) is obj and sectionFor(obj, self.processID) == "Main content":
+				if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.UNAVAILABLE} and trackRow(obj, self.processID) is obj and sectionFor(obj, self.processID) == "Main content":
 					rows.append(obj)
+					break
 		return rows
+
+	def _rememberTrackPage(self, row):
+		page = tuple(row.parent.UIAElement.GetRuntimeId())
+		if page != self._trackPage:
+			self._trackPageName = None
+		self._trackPage = page
 
 	def event_gainFocus(self, obj, nextHandler):
 		nextHandler()
@@ -327,13 +360,13 @@ class AppModule(appModuleHandler.AppModule):
 			self._manualSectionTarget = None
 			row = trackRow(obj, self.processID)
 			if row:
-				self._trackPage = tuple(row.parent.UIAElement.GetRuntimeId())
+				self._rememberTrackPage(row)
 			return
 		if not self._active() or self._operation is not None or not isinstance(obj, UIA):
 			return
-		if trackRow(obj, self.processID):
-			row = trackRow(obj, self.processID)
-			self._trackPage = tuple(row.parent.UIAElement.GetRuntimeId())
+		row = trackRow(obj, self.processID)
+		if row:
+			self._rememberTrackPage(row)
 			return
 		if sectionFor(obj, self.processID) in {"Player", "Queue", "Lyrics"} or any(parent.role in MENU_ROLES | {Role.DIALOG} for parent in ancestors(obj)):
 			return
@@ -354,17 +387,22 @@ class AppModule(appModuleHandler.AppModule):
 				rows = self._trackRows()
 				if rows:
 					page = tuple(rows[0].parent.UIAElement.GetRuntimeId())
-					if page != self._trackPage:
-						self._trackPage = page
+					name = normalizedName(rows[0].name)
+					previousName = getattr(self, "_trackPageName", None)
+					if page != self._trackPage or (previousName is not None and name != previousName):
 						revealTrack(rows[0])
 						rows[0].setFocus()
+						self._trackPage = page
+						self._trackPageName = name
 						return
+					self._trackPageName = name
+					return
 				attempts += 1
-				if attempts < 6:
-					core.callLater(600, check)
+				if attempts < 16:
+					core.callLater(250, check)
 			except Exception:
 				log.debugWarning("Apple Music: track-list focus unavailable", exc_info=True)
-		core.callLater(400, check)
+		core.callLater(100, check)
 
 	@script(description="Play the focused track, or activate the focused control", gestures=["kb:enter", "kb:numpadEnter"])
 	def script_playTrack(self, gesture):
@@ -464,6 +502,7 @@ class AppModule(appModuleHandler.AppModule):
 			return
 		self._navigationGeneration += 1
 		generation = self._navigationGeneration
+		self._navigationStarted = time.monotonic()
 		self._navigationDirection = direction
 		try:
 			original = self._focus()
@@ -496,6 +535,33 @@ class AppModule(appModuleHandler.AppModule):
 
 		core.callLater(1, advance)
 
+	def _quickSection(self, section, root):
+		"""Try a live remembered control or an exact ID before global discovery."""
+		rows = self._trackRows(root) if section == "Main content" else None
+		try:
+			old = getattr(self, "_sectionObjects", {}).get(section)
+			if old is not None:
+				obj = UIA(UIAElement=old.UIAElement.BuildUpdatedCache(UIAHandler.handler.baseCacheRequest))
+				if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} and sectionFor(obj, self.processID) == section:
+					if section != "Main content" or (rows and trackRow(obj, self.processID) and tuple(obj.parent.UIAElement.GetRuntimeId()) == tuple(rows[0].parent.UIAElement.GetRuntimeId())):
+						return obj
+		except Exception:
+			# Navigation destroys content controls; a stale reference is normal.
+			pass
+		if rows:
+			return rows[0]
+		identifier = {"Search": "Search_Button", "Sidebar": "NavigationViewBackButton", "Player": "TransportControl_PlayPauseStop"}.get(section)
+		if identifier is None:
+			return None
+		client = UIAHandler.handler.clientObject
+		condition = client.CreatePropertyCondition(UIAHandler.UIA_AutomationIdPropertyId, identifier)
+		element = root.FindFirstBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+		if element:
+			obj = UIA(UIAElement=element)
+			if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} and sectionFor(obj, self.processID) == section:
+				return obj
+		return None
+
 	def _navigationSteps(self, direction, originalID):
 		try:
 			focus = self._focus()
@@ -512,13 +578,23 @@ class AppModule(appModuleHandler.AppModule):
 			remembered = getattr(self, "_sectionFocus", {})
 			remembered[current] = focusID
 			self._sectionFocus = remembered
+			objects = getattr(self, "_sectionObjects", {})
+			objects[current] = focus
+			self._sectionObjects = objects
 			yield
 			client = UIAHandler.handler.clientObject
 			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
-			condition = client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True)
-			elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
 			sections = {}
-			if elements and elements.Length <= 1000:
+			preferred = SECTION_ORDER[(SECTION_ORDER.index(current) + self._navigationDirection) % len(SECTION_ORDER)]
+			quick = self._quickSection(preferred, root)
+			if quick is not None:
+				sections[preferred] = [quick]
+				elements = None
+			else:
+				condition = client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True)
+				elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+			lineageCache = {}
+			if elements:
 				for index in range(elements.Length):
 					yield
 					obj = UIA(UIAElement=elements.GetElement(index))
@@ -529,7 +605,7 @@ class AppModule(appModuleHandler.AppModule):
 					# An unnamed player position slider is not a main-content destination.
 					if obj.role == Role.SLIDER and not obj.name:
 						continue
-					lineage = list(ancestors(obj))
+					lineage = list(ancestors(obj, lineageCache))
 					if any(parent.role == Role.TITLEBAR for parent in lineage):
 						continue
 					section = sectionFor(obj, self.processID, lineage)
@@ -555,7 +631,7 @@ class AppModule(appModuleHandler.AppModule):
 				destination = available[0 if direction > 0 else -1]
 			candidates = sections[destination]
 			if destination == "Main content":
-				tracks = [obj for obj in candidates if re.match(r"^track\s+\d+\b", normalizedName(obj.name)) and trackRow(obj, self.processID) is obj]
+				tracks = [obj for obj in candidates if isTrackName(obj.name) and trackRow(obj, self.processID) is obj]
 				if tracks:
 					candidates = tracks
 			target = next((obj for obj in candidates if tuple(obj.UIAElement.GetRuntimeId()) == remembered.get(destination)), candidates[0])
@@ -568,6 +644,7 @@ class AppModule(appModuleHandler.AppModule):
 			if trackRow(target, self.processID):
 				revealTrack(target)
 			target.setFocus()
+			log.info("Apple Music: section focus requested in %.3f seconds (%s)", time.monotonic() - self._navigationStarted, destination)
 
 			def report():
 				if generation != self._navigationGeneration or not self._active():

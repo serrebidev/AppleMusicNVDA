@@ -1,4 +1,22 @@
-# Apple Music 0.4.0 preview
+# Apple Music 0.4.1
+
+Faster F6 navigation and more reliable album/playlist track focus.
+
+- Known controls and remembered destinations use direct, refreshed UI Automation lookup.
+- Fallback navigation shares ancestor information instead of repeatedly reading it.
+- Track discovery supports pages with more than 1,000 controls, stops at one usable
+  track, and scrolls tracks below the header into view.
+- Playlist rows without track numbers are recognized by their spoken duration.
+- Track loading checks start sooner; reused lists are checked for changed first tracks.
+
+83 automated tests pass. Live computer-use checks with NVDA confirmed first-track
+focus after clicking an album and a playlist. Album-page section focus requests
+took 0.221–0.579 seconds in three checks; speech completion is excluded.
+Full Queue/Lyrics-panel regression testing remains outstanding.
+
+Open AppleMusic-0.4.1.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.0 preview
 
 Native NVDA support for Apple Music on Windows.
 
