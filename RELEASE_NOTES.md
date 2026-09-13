@@ -1,4 +1,61 @@
-# Apple Music 0.4.1
+# Apple Music 0.4.4
+
+Fixes Home cards that read an artist list without context and decorative icon
+characters that leaked into album names. Includes the Home reading and track
+playback improvements since the last GitHub release, 0.4.1.
+
+- Personalized cards with an artist subtitle but no accessible title read
+  "Made for You, featuring [artists]". Titles exposed by Apple Music are retained;
+  missing artwork titles are not guessed from artists or list position.
+- Removes decorative private-use icon-font characters from card text while
+  preserving accented, non-Latin, and emoji titles.
+- Reads Home card titles and metadata and suppresses duplicate grouping names.
+- Enter on track rows uses the track's More button with Shift+F10 fallback;
+  child controls keep their native action and delayed menus are guarded.
+
+Validation: 123 automated tests pass; the subtitle correction and named stations
+were checked against captured live UI Automation data. User speech logs confirmed
+the earlier Home title and grouping improvements. Fresh speech/braille testing of
+the latest correction and live verification of the track playback changes remain
+outstanding. The package build validates archive contents and writes a SHA-256 file.
+
+Open AppleMusic-0.4.4.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.3
+
+Improves reading of Home cards and removes repeated grouping announcements.
+
+- Includes titles and metadata exposed inside Home grid cards, followed by
+  category context such as "Made for You". Duplicate labels are read once.
+- Includes accessible text clipped below artwork. Retains the original name
+  when no additional text is exposed or the card cannot be safely inspected.
+- Omits Home grouping announcements already supplied by a nearer group or the
+  focused link, while retaining distinct section names.
+- Uses NVDA object names for speech and braille without changing card actions.
+
+117 automated tests passed. Subsequent user speech logs confirmed the title and
+grouping improvements and identified the two remaining issues addressed in 0.4.4.
+
+Open AppleMusic-0.4.3.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.2
+
+Fixes Enter playback from album, radio-show album, and playlist track rows.
+
+- Uses the focused track's own More button after scrolling it into view, with
+  Shift+F10 as a fallback when no unique usable More button is exposed.
+- Enter on More and other child controls keeps its native action.
+- Cancels playback when focus changes before opening the menu and rejects menus
+  arriving after the playback timeout.
+- Never selects Play Next or Play Last, another row's More button, or multiple tracks.
+
+96 automated tests pass, including the reported Find Your Harmony track label.
+The new playback path still needs live verification; the computer-use helper
+could not connect during development. Earlier live checks are recorded below.
+
+Open AppleMusic-0.4.2.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.1
 
 Faster F6 navigation and more reliable album/playlist track focus.
 

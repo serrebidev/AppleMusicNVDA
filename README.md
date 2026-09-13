@@ -36,7 +36,24 @@ sections. Unsupported controls are grouped into Main content. If a menu or
 dialog is open, close it before switching sections. All shortcuts can be changed
 under Apple Music in NVDA's Input gestures dialog.
 
-## Album and playlist tracks
+## Reading Home cards
+
+Home grid cards include titles and metadata exposed inside the card, followed
+by context such as "Made for You" or "New Release 2026". Duplicate artwork and
+text labels are read once. Text clipped below the artwork can still be included
+when Apple Music exposes it through accessibility. If no additional text is
+available, the original name is retained.
+
+Some personalized cards expose only an artist subtitle and leave their artwork
+unlabeled. These read "Made for You, featuring [artists]"; the add-on cannot
+recover a title Apple Music does not expose. Decorative icon-font characters
+are excluded from card labels.
+
+Home grouping names are omitted from focus announcements when a nearer group
+or the focused control already has that name. Distinct section names remain.
+The corrected card name is available to both speech and braille.
+
+## Album, radio show, and playlist tracks
 
 When a newly exposed track list receives attention after navigation, the add-on
 focuses a track and scrolls it into view. It recognizes Apple's English numbered
@@ -46,10 +63,15 @@ list when you move to its header controls. Moving focus elsewhere cancels a
 pending automatic move. F6's Main content destination prefers available track
 rows over album/playlist header controls.
 
-Press **Enter** or **Numpad Enter** on a track to play it. The add-on opens that
-track's context menu and finds **Play “song title”** or **Play** by accessible
-name. It does not select Play Next or Play Last. Enter on other controls keeps
-its normal behavior. Multiple selected tracks are refused.
+Press **Enter** or **Numpad Enter** on a track row to play it. The add-on scrolls
+the row into view and invokes its own **More** button when one is exposed.
+Otherwise it tries Shift+F10. It finds **Play “song title”** or **Play** in that
+menu by accessible name, never Play Next or Play Last. This also applies to radio
+shows presented as album tracks, such as Find Your Harmony episodes.
+Enter on a track's More button opens that menu normally; other child controls
+also keep their native action. Multiple selected tracks are refused.
+Moving focus before the menu opens cancels playback. Menus arriving after the
+playback timeout are not acted on; a manually opened menu is left for you to use.
 
 The focused track may be the previously selected row, rather than the first
 track in the album. Pages that reuse the same list control without a focus event,
@@ -58,13 +80,13 @@ non-English track names, and unexposed virtual rows can require manual navigatio
 ## Installation and use
 
 1. Download the add-on from [GitHub releases](https://github.com/serrebidev/AppleMusicNVDA/releases/latest), or run `python build.py` to build it in `dist`.
-2. Open `AppleMusic-0.4.1.nvda-addon` and confirm NVDA's installation prompt.
+2. Open `AppleMusic-0.4.4.nvda-addon` and confirm NVDA's installation prompt.
 3. Restart NVDA when prompted.
 4. In Apple Music, focus one song/album or a player control and press
    **Control+Alt+Down Arrow** for Suggest Less or **Control+Alt+Up Arrow** for
    Favorite. Keep focus in place until feedback is spoken.
 
-Installing 0.4.1 upgrades the existing add-on. The display name is Apple Music;
+Installing 0.4.4 upgrades the existing add-on. The display name is Apple Music;
 the internal ID remains `appleMusicSuggestLess` to preserve the upgrade path.
 
 NVDA says “Suggest less” or “Added to favorites” after UI Automation accepts the action. This
@@ -102,8 +124,10 @@ scoped to AppleMusic.exe; it is not intercepted in other applications.
   the same small transport container. It rejects content rows and sidebar
   tree items. No screen coordinates or positional menu navigation are used.
 - Compatibility metadata targets NVDA 2025.1 through 2026.1. It is not a claim
-  of live testing on every release. This version has 83 automated mock tests and
-  the live checks described below.
+  of live testing on every release. This version has 123 automated mock tests.
+  User logs verified the 0.4.3 Home titles and grouping fixes. The 0.4.4 subtitle
+  correction was checked against captured live controls; its speech/braille output
+  and the 0.4.2 playback changes still need live verification.
 
 ## Verification
 
@@ -139,6 +163,38 @@ Live test checklist:
    favorite is added, then press it again and confirm the favorite remains set.
 9. Test F6 and Shift+F6 from Search, Sidebar, Player and content. Verify wrapping,
    remembered controls, hidden panels, and navigation with Queue or Lyrics open.
+
+## Changes in 0.4.4
+
+- Labels the artist-only personalized card as "Made for You, featuring [artists]"
+  when Apple exposes no title. Uses the observed SubtitleTextBlock identifier;
+  no mix or station title is guessed from artists or list position.
+- Excludes decorative private-use icon-font glyphs, including the reported
+  supplementary-plane character, while preserving ordinary Unicode titles.
+- 123 automated tests pass. Captured live data verified the subtitle fallback
+  and preservation of named stations. Fresh speech/braille verification is pending.
+
+## Changes in 0.4.3
+
+- Reads text exposed inside Home grid cards to supplement category-only names.
+- Removes repeated artwork/text labels and duplicate Home grouping announcements.
+- Keeps original names when cards lack text, become unavailable, or exceed the
+  bounded inspection limit. Sidebar entries and other pages retain their names.
+- 117 automated tests passed. Subsequent user speech logs confirmed Home titles
+  and removal of duplicate grouping announcements. Artist-only cards and an icon
+  glyph found in those logs are addressed in 0.4.4.
+
+## Changes in 0.4.2
+
+- Enter on an album, radio-show album, or playlist track invokes its own More
+  button, falling back to Shift+F10 when no unique usable button is exposed.
+- Enter on More and other track child controls keeps its native action.
+- Playback stays tied to the row focused when Enter was pressed, including
+  while waiting for scrolling, and ignores menus arriving after its timeout.
+- 96 automated tests pass, including the reported Find Your Harmony row label,
+  menu isolation, multiple selections, child controls, and delayed playback.
+- Live verification of these changes remains outstanding: the computer-use
+  helper could not connect during development.
 
 ## Changes in 0.4.1
 

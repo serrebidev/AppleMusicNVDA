@@ -27,14 +27,30 @@ Fallback discovery reuses parent information instead of repeatedly reading it.</
 <p>Close menus and dialogs before switching sections. Detection uses English
 accessible names and roles. Queue and Lyrics need named accessible containers;
 unsupported controls are grouped into Main content.</p>
-<h2>Album and playlist tracks</h2>
+<h2>Reading Home cards</h2>
+<p>Home grid cards include titles and metadata exposed inside the card, followed
+by context such as Made for You or New Release 2026. Duplicate artwork and text
+labels are read once. Accessible text clipped below the artwork is included.
+If no additional text is exposed, the original name is retained.</p>
+<p>Personalized cards with an artist subtitle and no exposed title read
+Made for You, featuring the artists. The add-on cannot recover titles from
+unlabeled artwork. Decorative icon-font characters are omitted.</p>
+<p>Repeated Home grouping names are omitted when a nearer group or the focused
+control already has the same name. Distinct section names remain. Corrected card
+names are available to speech and braille.</p>
+<h2>Album, radio show, and playlist tracks</h2>
 <p>A newly exposed track list receives focus after navigation. The add-on scrolls
 the track into view and remembers the list so subsequent focus moves are respected.
 F6 prefers tracks over album and playlist header controls. The selected row may
 be used instead of the first track.</p>
-<p>Press <strong>Enter</strong> or <strong>Numpad Enter</strong> on a track to play
-it through the menu command Play or Play followed by the quoted song title.
-Play Next and Play Last are never selected. Enter on other controls works normally.</p>
+<p>Press <strong>Enter</strong> or <strong>Numpad Enter</strong> on a track row to play
+it. The add-on scrolls the row into view, opens its own More button when available,
+and otherwise tries Shift+F10. It selects Play or Play followed by the quoted song
+title. Play Next and Play Last are never selected. Radio shows presented as album
+tracks, such as Find Your Harmony episodes, use the same behavior.</p>
+<p>Enter on a track's More button opens the menu normally. Other child controls keep
+their native action. Moving focus before the menu opens cancels playback, and menus
+arriving after the playback timeout are not acted on.</p>
 <p>Track recognition uses English numbered album names such as Track 1 and playlist
 rows ending with a duration, such as 3 minutes, 49 seconds. Tracks below the visible
 header are scrolled into view. Large pages with over 1,000 controls are supported.
@@ -57,14 +73,20 @@ command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
 <h2>Requirements and limitations</h2>
 <p>This version targets NVDA 2025.1 through 2026.1 and English Apple Music
 menu labels. No AutoHotkey or external UI Automation library is needed.
-The preview passes 76 simulated-control tests. Live playlist focus and Enter playback
-were verified; full album transitions and open Queue/Lyrics cycling still need testing.</p>
+Version 0.4.4 passes 123 simulated-control tests. User speech logs confirmed the
+Home title and grouping improvements. The latest artist-subtitle correction was
+checked against captured live controls; fresh speech and braille testing and the
+More-button playback path still need live verification. Earlier versions received live playlist focus and
+Enter playback checks; full album transitions and open Queue/Lyrics cycling still need testing.</p>
 <p>Preference commands need a focused UIA row/card, a recognizable player More
 button, or a song newly focused or selected by Control+L. An old selection is
 never assumed to be the current song. Unsupported layouts may require manual
 navigation. Multiple selections reported by UIA are refused. Changing applications
 cancels pending work. A disappeared control cannot have focus restored.</p>
 <h2>Updating</h2>
+<p>Version 0.4.2 fixes playback from track rows by using the track's own More button
+when exposed. Enter on More keeps its normal action. Delayed playback attempts are
+cancelled when focus moves or the menu timeout expires.</p>
 <p>Version 0.4.0 adds track-list focus and Enter playback. It recognizes the player's Repeat and Queue controls by their
 stable identifiers, keeping them out of Main content. It recognizes sidebar list items using the WinUI NavigationViewItem
 class and Sidebar automation IDs, so Home is no longer labelled Main content.

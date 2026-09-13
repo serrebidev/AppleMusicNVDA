@@ -9,6 +9,15 @@ from unittest.mock import Mock
 
 class Node:
     counter = 0
+    isPresentableFocusAncestor = True
+
+    @property
+    def name(self):
+        return self._name
+
+    @name.setter
+    def name(self, value):
+        self._name = value
 
     def __new__(cls, *args, UIAElement=None, **kwargs):
         if UIAElement is not None:
@@ -62,7 +71,7 @@ def installStubs():
         sys.modules[name] = types.ModuleType(name)
     sys.modules["appModuleHandler"].AppModule = type("AppModule", (), {"terminate": lambda self: None})
     sys.modules["controlTypes"].Role = types.SimpleNamespace(**{
-        name: name for name in ("LISTITEM", "TABLEROW", "DATAITEM", "POPUPMENU", "MENUITEM", "TREEVIEWITEM", "WINDOW", "BUTTON", "TOGGLEBUTTON", "SPLITBUTTON", "PANE", "GROUPING", "LIST", "DOCUMENT", "TREEVIEW", "EDITABLETEXT", "TOOLBAR", "SLIDER", "DIALOG", "TITLEBAR", "MENUBAR")
+        name: name for name in ("LISTITEM", "TABLEROW", "DATAITEM", "POPUPMENU", "MENUITEM", "TREEVIEWITEM", "WINDOW", "BUTTON", "TOGGLEBUTTON", "SPLITBUTTON", "PANE", "GROUPING", "LIST", "DOCUMENT", "TREEVIEW", "EDITABLETEXT", "TOOLBAR", "SLIDER", "DIALOG", "TITLEBAR", "MENUBAR", "STATICTEXT", "LINK", "GRAPHIC")
     })
     sys.modules["controlTypes"].State = types.SimpleNamespace(**{
         name: name for name in ("INVISIBLE", "OFFSCREEN", "UNAVAILABLE", "CHECKED")
@@ -996,6 +1005,381 @@ class SuggestLessTests(unittest.TestCase):
         self.openMenu(command)
         self.drain()
         command.UIAInvokePattern.Invoke.assert_called_once()
+
+    def test_album_and_radio_rows_open_their_own_more_button(self):
+        for name in (
+            "Track 1 Example song Artist Album 3 minutes",
+            "Track 1 Find Your Harmony Intro (FYH510) 2 minutes, 17 seconds",
+            "Without You Here 3 minutes, 49 seconds",
+        ):
+            with self.subTest(name=name):
+                self.setUp()
+                more = Node("BUTTON", "More")
+                row = Node("LISTITEM", name, children=[Node("GROUPING", children=[more])])
+                self.focus = row
+                play = Node("MENUITEM", 'Play "Example song"')
+                playNext = Node("MENUITEM", "Play Next")
+                playLast = Node("MENUITEM", "Play Last")
+                more.UIAInvokePattern.Invoke.side_effect = lambda: self.openMenu(play, playNext, playLast)
+                self.app.script_playTrack(Mock())
+                self.drain()
+                more.UIAInvokePattern.Invoke.assert_called_once()
+                play.UIAInvokePattern.Invoke.assert_called_once()
+                playNext.UIAInvokePattern.Invoke.assert_not_called()
+                playLast.UIAInvokePattern.Invoke.assert_not_called()
+                self.assertNotIn("shift+f10", self.keys)
+                self.assertEqual(self.messages[-1], "Playing track.")
+
+    def test_enter_on_track_child_controls_keeps_native_action(self):
+        for role, name in (("BUTTON", "More"), ("SPLITBUTTON", "More options"), ("BUTTON", "Favorite")):
+            with self.subTest(role=role, name=name):
+                self.setUp()
+                self.focus = Node(role, name)
+                Node("LISTITEM", "Track 1 Example song", children=[self.focus])
+                gesture = Mock()
+                self.app.script_playTrack(gesture)
+                gesture.send.assert_called_once()
+                self.assertIsNone(self.app._operation)
+                self.assertEqual(self.keys, [])
+
+    def test_play_does_not_retarget_during_deferred_start(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_playTrack(Mock())
+        self.focus = Node("LISTITEM", "Track 2 Another song")
+        self.drain()
+        self.assertEqual(self.keys, [])
+        self.assertIn("focus changed", self.messages[-1])
+
+    def test_play_resolves_more_after_scrolling(self):
+        self.trackFixture()
+        self.focus = self.track
+        more = Node("BUTTON", "More")
+        more.parent = self.track
+        scroll = Mock()
+        scroll.ScrollIntoView.side_effect = lambda: setattr(self.track, "firstChild", more)
+        self.track._getUIAPattern.return_value = scroll
+        play = Node("MENUITEM", "Play")
+        more.UIAInvokePattern.Invoke.side_effect = lambda: self.openMenu(play)
+        self.app.script_playTrack(Mock())
+        self.drain()
+        scroll.ScrollIntoView.assert_called_once()
+        more.UIAInvokePattern.Invoke.assert_called_once()
+        play.UIAInvokePattern.Invoke.assert_called_once()
+
+    def test_track_more_does_not_use_header_sibling_or_nested_row(self):
+        ownMore = Node("BUTTON", "More")
+        nestedMore = Node("BUTTON", "More")
+        row = Node("LISTITEM", "Track 1 Example", children=[
+            ownMore, Node("LISTITEM", "Track 2 Nested", children=[nestedMore]),
+        ])
+        siblingMore = Node("BUTTON", "More")
+        headerMore = Node("BUTTON", "More")
+        Node("GROUPING", "Content", children=[headerMore, row, Node("LISTITEM", "Track 3 Other", children=[siblingMore])])
+        self.assertIs(music.trackMoreButton(row, 42), ownMore)
+        for other in (nestedMore, siblingMore, headerMore):
+            other.UIAInvokePattern.Invoke.assert_not_called()
+
+    def test_unusable_and_ambiguous_more_buttons_fall_back_to_keyboard(self):
+        for variant in ("INVISIBLE", "OFFSCREEN", "UNAVAILABLE", "foreign", "noInvoke", "duplicate"):
+            with self.subTest(variant=variant):
+                self.setUp()
+                more = Node("BUTTON", "More")
+                children = [more]
+                if variant == "foreign":
+                    more.processID = 99
+                elif variant == "noInvoke":
+                    more.UIAInvokePattern = None
+                elif variant == "duplicate":
+                    children.append(Node("BUTTON", "More"))
+                else:
+                    more.states.add(variant)
+                self.focus = Node("LISTITEM", "Track 1 Example", children=children)
+                self.app.script_playTrack(Mock())
+                self.tick()
+                self.assertEqual(self.keys, ["shift+f10"])
+                for button in children:
+                    if button.UIAInvokePattern:
+                        button.UIAInvokePattern.Invoke.assert_not_called()
+
+    def test_track_more_incomplete_or_cyclic_tree_is_not_used(self):
+        for cyclic in (False, True):
+            with self.subTest(cyclic=cyclic):
+                more = Node("BUTTON", "More")
+                row = Node("LISTITEM", "Track 1 Example", children=[more])
+                if cyclic:
+                    more.next = more
+                else:
+                    row = Node("LISTITEM", "Track 1 Example", children=[more] + [Node("GROUPING") for _ in range(41)])
+                self.assertIsNone(music.trackMoreButton(row, 42))
+
+    def test_tabbing_to_more_while_scroll_pending_cancels_play(self):
+        more = Node("BUTTON", "More")
+        self.focus = Node("LISTITEM", "Track 1 Example", children=[more])
+        self.focus._getUIAPattern.return_value = Mock()
+        self.app.script_playTrack(Mock())
+        self.tick()
+        self.focus = more
+        self.drain()
+        more.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.keys, [])
+        self.assertIn("focus changed", self.messages[-1])
+
+    def test_tabbing_to_more_after_keyboard_fallback_cancels_play(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_playTrack(Mock())
+        self.tick()
+        more = Node("BUTTON", "More")
+        more.parent = self.track
+        self.focus = more
+        self.tick()
+        self.assertIsNone(self.app._operation)
+        self.assertIn("focus changed", self.messages[-1])
+        gesture = Mock()
+        self.app.script_playTrack(gesture)
+        gesture.send.assert_called_once()
+        play = Node("MENUITEM", "Play")
+        self.openMenu(play)
+        self.drain()
+        play.UIAInvokePattern.Invoke.assert_not_called()
+
+    def test_invoked_more_can_receive_focus_while_its_menu_loads(self):
+        more = Node("BUTTON", "More")
+        self.focus = Node("LISTITEM", "Track 1 Example", children=[more])
+        more.UIAInvokePattern.Invoke.side_effect = lambda: setattr(self, "focus", more)
+        self.app.script_playTrack(Mock())
+        self.tick()
+        self.tick()
+        self.assertIsNotNone(self.app._operation)
+        play = Node("MENUITEM", "Play")
+        self.openMenu(play)
+        self.drain()
+        play.UIAInvokePattern.Invoke.assert_called_once()
+
+    def test_late_menu_is_not_used_after_play_deadline(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_playTrack(Mock())
+        self.tick()
+        self.app._operation["deadline"] = 0
+        play = Node("MENUITEM", "Play")
+        self.openMenu(play)
+        self.drain()
+        play.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.keys, ["shift+f10"])
+        self.assertEqual(self.messages[-1], "Play not available.")
+
+    def test_timed_out_play_does_not_consume_manually_opened_menu(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_playTrack(Mock())
+        self.tick()
+        self.app._operation["deadline"] = 0
+        self.tick()
+        play = Node("MENUITEM", "Play")
+        self.openMenu(play)
+        self.drain()
+        play.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertIsNone(self.app._operation)
+
+    def test_play_more_refuses_multiple_selection(self):
+        more = Node("BUTTON", "More")
+        self.focus = Node("LISTITEM", "Track 1 Example", children=[more])
+        container = Node("LIST", children=[self.focus])
+        container.UIASelectionPattern = types.SimpleNamespace(
+            GetCurrentSelection=lambda: types.SimpleNamespace(Length=2)
+        )
+        self.app.script_playTrack(Mock())
+        self.drain()
+        more.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.keys, [])
+        self.assertIn("only one", self.messages[-1])
+
+
+class HomeReadingTests(unittest.TestCase):
+    def card(self, name="Made for You", children=(), home=True):
+        card = music.HomeCard("LISTITEM", name, children=children)
+        card.cachedClassName = "GridViewItem"
+        Node("GROUPING", "Home" if home else "Browse", children=[
+            Node("GROUPING", "Top Picks for You", children=[Node("LIST", children=[card])])
+        ])
+        return card
+
+    def test_card_announces_title_artist_and_category(self):
+        card = self.card("New Release 2026", [Node("GROUPING", children=[
+            Node("STATICTEXT", "New Release 2026"),
+            Node("LINK", "An Album"), Node("STATICTEXT", "An Artist"),
+        ])])
+        self.assertEqual(card._get_name(), "An Album, An Artist, New Release 2026")
+
+    def test_made_for_you_cards_have_distinct_titles(self):
+        for title in ("Favorites Mix", "New Music Mix", "Get Up! Mix"):
+            with self.subTest(title=title):
+                card = self.card(children=[Node("STATICTEXT", title)])
+                self.assertEqual(card._get_name(), f"{title}, Made for You")
+
+    def test_offscreen_card_text_is_still_read(self):
+        title = Node("STATICTEXT", "Focus Radio Station")
+        title.states.add("OFFSCREEN")
+        self.assertEqual(self.card("Mood for You", [title])._get_name(),
+                         "Focus Radio Station, Mood for You")
+
+    def test_duplicate_artwork_and_link_labels_read_once(self):
+        card = self.card(children=[Node("GRAPHIC", "Favorites Mix"),
+                                   Node("LINK", "Favorites Mix", [Node("STATICTEXT", "Favorites Mix")])])
+        self.assertEqual(card._get_name(), "Favorites Mix, Made for You")
+
+    def test_complete_existing_album_name_is_preserved(self):
+        name = "KWEEN Young M.A Explicit"
+        card = self.card(name, [Node("STATICTEXT", "KWEEN"),
+                                Node("STATICTEXT", "Young M.A"), Node("STATICTEXT", "Explicit")])
+        self.assertEqual(card._get_name(), name)
+
+    def test_artist_subtitle_without_title_has_category_and_context(self):
+        subtitle = Node("STATICTEXT", "Sublab, Portair, MTNS, Nathyn, ARTO, Drove, Novra, SINTUS and\u00a0more")
+        subtitle.cachedAutomationId = "SubtitleTextBlock"
+        card = self.card(children=[Node("GRAPHIC"), Node("STATICTEXT", "Made for You"), subtitle])
+        self.assertEqual(card._get_name(),
+                         "Made for You, featuring Sublab, Portair, MTNS, Nathyn, ARTO, Drove, Novra, SINTUS and more")
+
+    def test_station_title_is_retained_with_artist_subtitle(self):
+        title = Node("STATICTEXT", "A Station")
+        title.cachedAutomationId = "TitleTextBlock"
+        subtitle = Node("STATICTEXT", "Artist A, Artist B and more")
+        subtitle.cachedAutomationId = "SubtitleTextBlock"
+        card = self.card(children=[title, subtitle])
+        self.assertEqual(card._get_name(), "A Station, Artist A, Artist B and more, Made for You")
+
+    def test_named_artwork_still_provides_a_title(self):
+        subtitle = Node("STATICTEXT", "Artist A, Artist B and more")
+        subtitle.cachedAutomationId = "SubtitleTextBlock"
+        card = self.card(children=[Node("GRAPHIC", "A Mix"), subtitle])
+        self.assertEqual(card._get_name(), "A Mix, Artist A, Artist B and more, Made for You")
+
+    def test_editorial_subtitle_is_not_called_an_artist_list(self):
+        subtitle = Node("STATICTEXT", "Music selected for you.")
+        subtitle.cachedAutomationId = "SubtitleTextBlock"
+        card = self.card(children=[subtitle])
+        self.assertEqual(card._get_name(), "Made for You, Music selected for you.")
+
+    def test_private_use_icon_glyphs_are_not_spoken(self):
+        name = "Lil Herb: Lil Heroin Edition G Herbo Explicit"
+        for glyph in ("\ue09d", "\U000f009d", "\U0010009d"):
+            with self.subTest(glyph=repr(glyph)):
+                card = self.card(name, [Node("STATICTEXT", glyph), Node("STATICTEXT", name)])
+                self.assertEqual(card._get_name(), name)
+
+    def test_real_unicode_titles_remain_intact(self):
+        card = self.card(children=[Node("STATICTEXT", "VOILÀ & 東京 \U0001f499")])
+        self.assertEqual(card._get_name(), "VOILÀ & 東京 \U0001f499, Made for You")
+
+    def test_punctuation_ampersands_and_accents_preserved(self):
+        card = self.card("Featuring VOILÀ", [Node("STATICTEXT", "This & That...")])
+        self.assertEqual(card._get_name(), "This & That..., Featuring VOILÀ")
+
+    def test_does_not_treat_partial_word_as_duplicate(self):
+        card = self.card(children=[Node("STATICTEXT", "Rain"), Node("STATICTEXT", "Rainbow")])
+        self.assertEqual(card._get_name(), "Rain, Rainbow, Made for You")
+
+    def test_missing_or_unexposed_text_keeps_original(self):
+        for children in ([], [Node("STATICTEXT", "Made for You")], [Node("STATICTEXT", " ")]):
+            self.assertEqual(self.card(children=children)._get_name(), "Made for You")
+
+    def test_unnamed_card_uses_child_title(self):
+        self.assertEqual(self.card("", [Node("STATICTEXT", "Favorites Mix")])._get_name(), "Favorites Mix")
+
+    def test_hidden_foreign_and_nested_control_content_excluded(self):
+        hidden = Node("GROUPING", children=[Node("STATICTEXT", "Hidden")])
+        hidden.states.add("INVISIBLE")
+        card = self.card(children=[Node("STATICTEXT", "Favorites Mix"), hidden,
+            Node("STATICTEXT", "Foreign", processID=99),
+            Node("LISTITEM", "Other card", [Node("STATICTEXT", "Other title")]),
+            Node("LIST", children=[Node("STATICTEXT", "Other list")]),
+            Node("BUTTON", "More", [Node("STATICTEXT", "Command")]),
+        ])
+        self.assertEqual(card._get_name(), "Favorites Mix, Made for You")
+
+    def test_adjacent_card_never_borrowed(self):
+        card = self.card()
+        card.next = Node("LISTITEM", "Another card", [Node("STATICTEXT", "Wrong title")])
+        self.assertEqual(card._get_name(), "Made for You")
+
+    def test_large_or_cyclic_card_falls_back(self):
+        card = self.card(children=[Node("STATICTEXT", str(i)) for i in range(70)])
+        self.assertEqual(card._get_name(), "Made for You")
+        card = self.card(children=[Node("STATICTEXT", "Favorites Mix")])
+        card.firstChild.next = card.firstChild
+        self.assertEqual(card._get_name(), "Made for You")
+
+    def test_stale_card_falls_back_without_warning(self):
+        card = self.card(children=[Node("STATICTEXT", "Favorites Mix")])
+        card.firstChild.GetRuntimeId = Mock(side_effect=RuntimeError("Stale element"))
+        music.log.reset_mock()
+        self.assertEqual(card._get_name(), "Made for You")
+        music.log.warning.assert_not_called()
+        music.log.exception.assert_not_called()
+
+    def test_card_text_refreshes_for_reused_item(self):
+        child = Node("STATICTEXT", "First Mix")
+        card = self.card(children=[child])
+        self.assertEqual(card._get_name(), "First Mix, Made for You")
+        child.name = "Second Mix"
+        self.assertEqual(card._get_name(), "Second Mix, Made for You")
+
+    def test_other_pages_and_sidebar_unchanged(self):
+        card = self.card(children=[Node("STATICTEXT", "Title")], home=False)
+        self.assertEqual(card._get_name(), "Made for You")
+        card = self.card(children=[Node("STATICTEXT", "Title")])
+        card.cachedAutomationId = "Sidebar_Home"
+        self.assertEqual(card._get_name(), "Made for You")
+
+    def test_overlay_selection_uses_observed_grid_class(self):
+        app = music.AppModule()
+        card = self.card()
+        for obj, expected in ((card, music.HomeCard), (Node("GROUPING"), music.HomeGrouping)):
+            classes = [Node]
+            app.chooseNVDAObjectOverlayClasses(obj, classes)
+            self.assertEqual(classes, [expected, Node])
+        classes = [Node]
+        app.chooseNVDAObjectOverlayClasses(Node("LISTITEM", "Track 1"), classes)
+        self.assertEqual(classes, [Node])
+
+    def groups(self, focusName="Recently Played", outerName="Recently Played", innerName="Recently Played", page="Home"):
+        focus = Node("LINK", focusName)
+        inner = music.HomeGrouping("GROUPING", innerName, [focus])
+        outer = music.HomeGrouping("GROUPING", outerName, [inner])
+        home = music.HomeGrouping("GROUPING", page, [outer])
+        music.api.getFocusObject = lambda: focus
+        return focus, inner, outer, home
+
+    def test_link_does_not_repeat_two_group_names(self):
+        focus, inner, outer, home = self.groups()
+        self.assertFalse(inner._get_isPresentableFocusAncestor())
+        self.assertFalse(outer._get_isPresentableFocusAncestor())
+        self.assertTrue(home._get_isPresentableFocusAncestor())
+        self.assertEqual(focus.name, "Recently Played")
+        self.assertEqual(focus.role, "LINK")
+
+    def test_distinct_section_name_retained_once(self):
+        focus, inner, outer, home = self.groups(focusName="An Album")
+        self.assertTrue(inner._get_isPresentableFocusAncestor())
+        self.assertFalse(outer._get_isPresentableFocusAncestor())
+
+    def test_unique_group_names_retained(self):
+        focus, inner, outer, home = self.groups(focusName="An Album", innerName="Featured", outerName="Top Picks for You")
+        self.assertTrue(inner._get_isPresentableFocusAncestor())
+        self.assertTrue(outer._get_isPresentableFocusAncestor())
+
+    def test_grouping_outside_home_unchanged(self):
+        focus, inner, outer, home = self.groups(page="Browse")
+        self.assertTrue(inner._get_isPresentableFocusAncestor())
+        self.assertTrue(outer._get_isPresentableFocusAncestor())
+
+    def test_grouping_not_in_focus_ancestry_unchanged(self):
+        focus, inner, outer, home = self.groups()
+        music.api.getFocusObject = lambda: Node("LINK", "Recently Played")
+        self.assertTrue(inner._get_isPresentableFocusAncestor())
 
 
 if __name__ == "__main__":

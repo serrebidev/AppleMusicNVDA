@@ -8,6 +8,7 @@ focus events without sleeping. Menus are matched by name; toggles check state.
 
 import time
 import re
+import unicodedata
 from collections import deque
 
 import api
@@ -153,6 +154,40 @@ def revealTrack(row):
 	except Exception:
 		log.debug("Apple Music: track has no usable ScrollItem pattern", exc_info=True)
 	return False
+
+
+def trackMoreButton(row, processID):
+	"""Find one usable More button inside this row, never another track's menu."""
+	pending = deque([row])
+	seen = set()
+	buttons = []
+	for unused in range(40):
+		if not pending:
+			return buttons[0] if len(buttons) == 1 else None
+		obj = pending.popleft()
+		if not isinstance(obj, UIA) or obj.processID != processID:
+			continue
+		identity = tuple(obj.UIAElement.GetRuntimeId())
+		if identity in seen:
+			return None
+		seen.add(identity)
+		if obj is not row and obj.role in ITEM_ROLES | MENU_ROLES:
+			continue
+		if obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}:
+			continue
+		if obj.role in {Role.BUTTON, Role.SPLITBUTTON}:
+			if normalizedName(obj.name) in MORE_NAMES and obj.UIAInvokePattern:
+				buttons.append(obj)
+			continue
+		child = obj.firstChild
+		for childIndex in range(40):
+			if child is None:
+				break
+			pending.append(child)
+			child = child.next
+		if child is not None:
+			return None
+	return None
 
 
 def playerMoreSteps(focus, processID):
@@ -314,6 +349,117 @@ def menuCommands(root, processID):
 	return commands
 
 
+def homeContent(obj):
+	"""Use provider names so checking ancestry cannot recurse into our overlays."""
+	for parent in ancestors(obj):
+		if parent.processID != obj.processID or isSidebarItem(parent):
+			return False
+		if isinstance(parent, UIA) and parent.role in {Role.GROUPING, Role.PANE, Role.DOCUMENT} and parent.UIAElement.cachedName == "Home":
+			return True
+	return False
+
+
+def homeCardName(card, original):
+	"""Read this card's labels, including text clipped below its artwork."""
+	labels = []
+	subtitles = []
+	hasTitle = False
+	seen = set()
+	pending = [(card.firstChild, 0)]
+	for unused in range(64):
+		if not pending:
+			break
+		obj, depth = pending.pop()
+		if obj is None:
+			continue
+		identity = tuple(obj.UIAElement.GetRuntimeId()) if isinstance(obj, UIA) else id(obj)
+		if identity in seen:
+			return original
+		seen.add(identity)
+		pending.append((obj.next, depth))
+		if obj.processID != card.processID or State.INVISIBLE in obj.states:
+			continue
+		if obj.role in {Role.STATICTEXT, Role.LINK, Role.GRAPHIC}:
+			# XAML icon fonts expose private-use glyphs as text (including
+			# supplementary-plane characters). They are not music metadata.
+			label = " ".join("".join(char for char in (obj.name or "") if unicodedata.category(char) != "Co").split())
+			if label:
+				labels.append(label)
+				identifier = obj.UIAElement.cachedAutomationId if isinstance(obj, UIA) else ""
+				if identifier == "TitleTextBlock":
+					hasTitle = True
+				elif identifier == "SubtitleTextBlock":
+					subtitles.append(label)
+		elif obj.role not in {Role.PANE, Role.GROUPING}:
+			# Never borrow from a nested list, a menu, or a control's popup.
+			continue
+		if depth < 6:
+			pending.append((obj.firstChild, depth + 1))
+		elif obj.firstChild is not None:
+			return original
+	else:
+		return original
+	# Preserve punctuation and ampersands in music titles. Remove only complete
+	# repeated labels, or labels already contained as words in a richer label.
+	def contains(text, fragment):
+		return f" {fragment.casefold()} " in f" {text.casefold()} "
+	base = " ".join((original or "").split())
+	if not labels or all(contains(base, label) for label in labels):
+		return original
+	# Some personalized cards put their title only in unlabeled artwork.
+	# Do not present SubtitleTextBlock's artist list as the missing title or
+	# guess which mix/station it is from artists or its position on Home.
+	if base == "Made for You" and not hasTitle and len(subtitles) == 1 and all(label in {base, subtitles[0]} for label in labels):
+		subtitle = subtitles[0]
+		if "," in subtitle and subtitle.casefold().endswith(" and more"):
+			subtitle = "featuring " + subtitle
+		return f"{base}, {subtitle}"
+	parts = []
+	for label in labels + [base]:
+		if not label or any(contains(part, label) for part in parts):
+			continue
+		parts = [part for part in parts if not contains(label, part)]
+		parts.append(label)
+	# The provider's short category is context, not the identity of the music.
+	if base in parts and len(parts) > 1:
+		parts.remove(base)
+		parts.append(base)
+	return ", ".join(parts)
+
+
+class HomeCard(UIA):
+	def _get_name(self):
+		original = super().name
+		try:
+			if homeContent(self):
+				return homeCardName(self, original)
+		except Exception:
+			# Virtualized cards may disappear during a property read.
+			log.debug("Apple Music: Home card text unavailable", exc_info=True)
+		return original
+
+
+class HomeGrouping(UIA):
+	def _get_isPresentableFocusAncestor(self):
+		try:
+			name = self.UIAElement.cachedName
+			if name and homeContent(self):
+				focus = api.getFocusObject()
+				duplicate = False
+				for obj in ancestors(focus):
+					if not isinstance(obj, UIA) or obj.processID != self.processID:
+						break
+					if tuple(obj.UIAElement.GetRuntimeId()) == tuple(self.UIAElement.GetRuntimeId()):
+						if duplicate:
+							return False
+						break
+					if obj.UIAElement.cachedName == name:
+						duplicate = True
+		except Exception:
+			log.debug("Apple Music: Home grouping unavailable", exc_info=True)
+		return super().isPresentableFocusAncestor
+
+
 class AppModule(appModuleHandler.AppModule):
 	scriptCategory = "Apple Music"
 	_operation = None
@@ -321,6 +467,14 @@ class AppModule(appModuleHandler.AppModule):
 	_navigationGeneration = 0
 	_trackFocusGeneration = 0
 	_trackPage = None
+
+	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
+		if not isinstance(obj, UIA):
+			return
+		if obj.role in ITEM_ROLES and obj.UIAElement.cachedClassName == "GridViewItem":
+			clsList.insert(0, HomeCard)
+		elif obj.role == Role.GROUPING:
+			clsList.insert(0, HomeGrouping)
 
 	def _trackRows(self, root=None):
 		"""Only one row is needed; do not wrap/classify every song on the page."""
@@ -407,8 +561,9 @@ class AppModule(appModuleHandler.AppModule):
 	@script(description="Play the focused track, or activate the focused control", gestures=["kb:enter", "kb:numpadEnter"])
 	def script_playTrack(self, gesture):
 		focus = self._focus() if self._active() else None
-		if focus is not None and trackRow(focus, self.processID) is not None:
-			self._begin("play")
+		# More and other child controls keep their native Enter action.
+		if focus is not None and focus.role in ITEM_ROLES and trackRow(focus, self.processID) is not None:
+			self._begin("play", focus)
 		else:
 			gesture.send()
 			if focus is not None:
@@ -664,7 +819,7 @@ class AppModule(appModuleHandler.AppModule):
 			log.exception("Apple Music: section navigation failed")
 			ui.message("Apple Music's sections could not be accessed.")
 
-	def _begin(self, action):
+	def _begin(self, action, expectedFocus=None):
 		if not self._active():
 			return
 		if self._operation is not None:
@@ -673,6 +828,8 @@ class AppModule(appModuleHandler.AppModule):
 		self._generation += 1
 		self._navigationGeneration += 1
 		self._operation = {"action": action, "original": None, "restore": False, "openedMenu": False}
+		if expectedFocus is not None:
+			self._operation["expectedFocus"] = tuple(expectedFocus.UIAElement.GetRuntimeId())
 		# Defer to avoid injecting keys inside the triggering script.
 		self._later(self._start)
 
@@ -680,6 +837,10 @@ class AppModule(appModuleHandler.AppModule):
 		focus = self._focus()
 		if focus is None:
 			self._finish("Apple Music's focused control is not available through UI Automation.")
+			return
+		expectedFocus = self._operation.get("expectedFocus")
+		if expectedFocus is not None and tuple(focus.UIAElement.GetRuntimeId()) != expectedFocus:
+			self._finish("Apple Music command cancelled: focus changed.", restore=False)
 			return
 		self._operation["original"] = focus
 		if any(obj.role in MENU_ROLES for obj in ancestors(focus)):
@@ -791,10 +952,24 @@ class AppModule(appModuleHandler.AppModule):
 	def _sendTrackMenu(self):
 		focus = self._focus()
 		item = focusedItem(focus, self.processID) if focus else None
-		if item is None or tuple(item.UIAElement.GetRuntimeId()) != self._operation["target"]:
+		expectedFocus = self._operation.get("expectedFocus")
+		if item is None or tuple(item.UIAElement.GetRuntimeId()) != self._operation["target"] or (expectedFocus is not None and tuple(focus.UIAElement.GetRuntimeId()) != expectedFocus):
 			self._finish("Apple Music command cancelled: focus changed.", restore=False)
 			return
-		keyboardHandler.KeyboardInputGesture.fromName("shift+f10").send()
+		# Some album/radio track rows ignore Shift+F10 while their own More
+		# button works. Resolve it after scrolling, since children may change.
+		more = trackMoreButton(item, self.processID) if self._operation["action"] == "play" else None
+		actual = self._focus()
+		if not self._active() or actual is None or tuple(actual.UIAElement.GetRuntimeId()) != tuple(focus.UIAElement.GetRuntimeId()):
+			self._finish("Apple Music command cancelled: focus changed.", restore=False)
+			return
+		if more is not None:
+			log.debug("Apple Music: opening focused track's More button")
+			self._operation["menuButton"] = tuple(more.UIAElement.GetRuntimeId())
+			more.UIAInvokePattern.Invoke()
+		else:
+			log.debug("Apple Music: opening focused item's menu with Shift+F10")
+			keyboardHandler.KeyboardInputGesture.fromName("shift+f10").send()
 		self._operation["openedMenu"] = True
 		self._operation["deadline"] = time.monotonic() + 2.0
 		self._later(self._waitForMenu, 150)
@@ -802,9 +977,19 @@ class AppModule(appModuleHandler.AppModule):
 	def _waitForMenu(self):
 		action = self._action()
 		label = action["label"]
+		# A delayed callback must not consume a menu the user opened after
+		# the operation timed out.
+		if self._operation["action"] == "play" and time.monotonic() >= self._operation["deadline"]:
+			self._finish(f"{label} not available.", restore=False)
+			return
 		focus = self._focus()
 		menu = focusedMenu(focus, self.processID) if focus else None
 		openingPopup = focus is not None and focus.role == Role.WINDOW and normalizedName(focus.name) in {"pop-up", "popup"}
+		if focus and menu is None and not openingPopup and self._operation.get("expectedFocus") is not None:
+			allowedFocus = {self._operation["expectedFocus"], self._operation.get("menuButton")}
+			if tuple(focus.UIAElement.GetRuntimeId()) not in allowedFocus:
+				self._finish(f"{label} cancelled: focus changed.", restore=False)
+				return
 		if focus and menu is None and not openingPopup and not self._operation.get("playerMenu"):
 			item = focusedItem(focus, self.processID)
 			if item is None or tuple(item.UIAElement.GetRuntimeId()) != self._operation["target"]:
