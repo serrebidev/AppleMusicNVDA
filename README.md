@@ -1,22 +1,67 @@
 # Apple Music for NVDA
 
-Press **Control+Alt+Down Arrow** in the Windows Apple Music app to invoke
-**Suggest Less** for the song or album containing keyboard focus. From player
-controls, a focused Action/More button is used directly. Otherwise the add-on
-looks for the verified player Action button across the window, including when
-focus is in Queue, then checks a small group of transport controls and invokes
-it. If no suitable button is exposed, **Control+L** is used
-to reveal the current song. Both routes find the command by accessible name.
+A free NVDA add-on for Apple Music on Windows, built for quicker keyboard
+navigation, clearer Home card announcements, and easy access to Favorite and
+Suggest Less.
 
-Press **Control+Alt+Up Arrow** to **Favorite** the focused song/album or current
-song using the same player fallback. Repeating this shortcut does not remove
-an existing favorite: removal commands and checked Favorite items are detected
-and announced as “Already a favorite.” Both American and British English menu
-spellings are supported. Checkable commands use Toggle only when their live
-state is explicitly off. Commands that expose Invoke are also supported.
+## Features
 
-This is a native Python NVDA app module. AutoHotkey, UIA-v2, a mouse, and
-additional Python packages are not required.
+- Move between Search, Sidebar, Player, Main content, and supported open Queue
+  and Lyrics panels with F6 and Shift+F6.
+- Return to the last control you left in a section when using section navigation.
+- Move into newly opened album and playlist track lists and bring the focused
+  track into view.
+- Play the focused album, playlist, or radio-show track with Enter.
+- Favorite a song or album, or suggest less of it, with a keyboard shortcut.
+  The same commands work on the current song from player controls.
+- Keep existing favorites and Suggest Less preferences when you repeat a shortcut.
+- Read titles and metadata exposed inside Home cards, with fewer duplicate
+  labels and grouping announcements. Improved names work with speech and braille.
+- Reassign the add-on's shortcuts in NVDA's Input gestures dialog.
+
+The add-on runs inside NVDA. No mouse, AutoHotkey, or extra Python packages are
+needed. It works with the Windows Apple Music app; its shortcuts only apply
+while that app is active.
+
+## Keyboard shortcuts
+
+These are the add-on's default shortcuts.
+
+| Shortcut | Action |
+| --- | --- |
+| F6 | Move to the next available section. |
+| Shift+F6 | Move to the previous available section. |
+| Enter or Numpad Enter | Play the focused track row. Other controls keep their normal Enter action. |
+| Control+Alt+Up Arrow | Favorite the focused song or album, or the current song from player controls. |
+| Control+Alt+Down Arrow | Suggest less of the focused song or album, or the current song from player controls. |
+
+To change a shortcut, open NVDA's **Preferences > Input gestures** while Apple
+Music is active, then find the command under **Apple Music**.
+
+## Getting started
+
+1. Download the `.nvda-addon` file from the
+   [latest release](https://github.com/serrebidev/AppleMusicNVDA/releases/latest).
+2. Open the file, confirm NVDA's installation prompt, and restart NVDA when asked.
+3. Open Apple Music. Use **F6** to move between sections, then **Tab** or the arrow
+   keys to move within a section.
+4. Focus a track row and press **Enter** to play it, or use the Favorite and
+   Suggest Less shortcuts on one song or album.
+
+## Favorite and Suggest Less
+
+Focus a song or album and press **Control+Alt+Up Arrow** to favorite it, or
+**Control+Alt+Down Arrow** to suggest less of it. From player controls, the
+add-on tries to apply the command to the current song. Keep focus in place
+until NVDA announces the result.
+
+Repeating a shortcut keeps the preference set: it does not remove a favorite
+or undo Suggest Less. NVDA tells you when the preference is already set or
+the command is unavailable. Select only one song or album at a time.
+
+English Apple Music menus are supported, including both Favorite and Favourite
+spellings. Some layouts may still need manual navigation; the details below
+cover section navigation, track playback, and known limitations.
 
 ## Section navigation
 
