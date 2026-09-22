@@ -106,8 +106,11 @@ Press **Home** or **End** on a track row to move to the first or last track.
 The add-on waits briefly for Apple Music's virtualized list to expose the final
 track name before NVDA announces it.
 
-Press **Enter** or **Numpad Enter** on a track row to play it. This also works
-with radio shows presented as album tracks. Enter on a track's More button
+Press **Enter** or **Numpad Enter** on a track row to play it. The add-on
+double-clicks the row's title, as a mouse user would, which is much faster than
+the More menu, and puts the mouse pointer back. If the title is hidden or covered,
+it uses the track's More menu instead. This also works with radio shows presented
+as album tracks. Enter on a track's More button
 opens its menu normally, and other child controls keep their usual action.
 
 ### Favorite and Suggest Less

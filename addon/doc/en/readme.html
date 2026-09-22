@@ -59,8 +59,11 @@ the track into view and remembers the list so subsequent focus moves are respect
 F6 prefers tracks over album and playlist header controls. The selected row may
 be used instead of the first track.</p>
 <p>Press <strong>Enter</strong> or <strong>Numpad Enter</strong> on a track row to play
-it. The add-on scrolls the row into view, opens its own More button when available,
-and otherwise tries Shift+F10. It selects Play or Play followed by the quoted song
+it. The add-on double-clicks a plain text cell of the row, such as the title, and
+then puts the mouse pointer back. It only clicks when Windows confirms that point
+belongs to that cell, so links, buttons and anything covering the row are never
+clicked. Otherwise it scrolls the row into view, opens its own More button when
+available, and otherwise tries Shift+F10. It selects Play or Play followed by the quoted song
 title. Play Next and Play Last are never selected. Radio shows presented as album
 tracks, such as Find Your Harmony episodes, use the same behavior.</p>
 <p>Enter on a track's More button opens the menu normally. Other child controls keep
@@ -91,7 +94,7 @@ command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
 <h2>Requirements and limitations</h2>
 <p>This version targets NVDA 2025.1 through 2027.1 and English Apple Music
 menu labels. No AutoHotkey or external UI Automation library is needed.
-Version 0.4.7 passes 144 simulated-control tests. Live NVDA MCP testing on NVDA
+Version 0.4.8 passes 146 simulated-control tests. Live NVDA MCP testing on NVDA
 2027.1 confirmed settled Home and End announcements in a 229-track playlist;
 Page Up and Page Down also matched refreshed focus reports. Fresh braille testing,
 full album transitions, and open Queue/Lyrics cycling still need testing.</p>

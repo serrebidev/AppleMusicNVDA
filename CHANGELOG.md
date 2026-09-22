@@ -3,6 +3,15 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.8
+
+- Enter on a track row plays it by double-clicking a plain text cell of the row,
+  about twice as fast as the More menu and without menu speech. The point comes
+  from UI Automation and must hit-test back to that cell; the mouse pointer is
+  restored. Hidden or covered rows fall back to the More menu.
+- 146 automated tests pass. Live NVDA MCP: playlist Enter played in about 0.2
+  seconds versus about 0.8 seconds through the menu.
+
 ## Changes in 0.4.7
 
 - Adds Control+S: opens search and focuses the search field for typing, or

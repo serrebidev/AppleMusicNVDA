@@ -28,7 +28,10 @@
 - Keep UI operations on NVDA's main thread. Use scheduled callbacks for waits
   so keyboard input and speech can continue.
 - Use accessible names, roles, identifiers, and UI Automation patterns to locate
-  controls and commands. Do not depend on screen coordinates or menu positions.
+  controls and commands. Do not depend on fixed screen coordinates or menu
+  positions. The one pointer action: Enter on a track row double-clicks a plain
+  text cell of that row, at a point taken from UIA that must hit-test back to
+  the same cell, then restores the pointer. Otherwise it uses the More menu.
 - Favorite and Suggest Less must preserve an already-set preference. Never
   invoke removal or undo commands, and reject multiple selected items.
 - Enter on a track row plays that track; child controls retain their native

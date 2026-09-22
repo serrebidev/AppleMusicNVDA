@@ -1,4 +1,23 @@
-# Apple Music 0.4.7
+# Apple Music 0.4.8
+
+Makes Enter on a track much faster.
+
+- Enter on a track row double-clicks the row's title, as a mouse user would, and
+  puts the mouse pointer back. This is about twice as fast as opening the More
+  menu and no longer announces the menu.
+- The click only happens when Windows confirms the point belongs to that title,
+  so links, buttons and anything covering the row are never clicked. Otherwise
+  the add-on uses the More menu as before.
+
+Validation: 146 automated tests pass. Live NVDA MCP testing on NVDA 2027.1 in a
+14,363-track playlist: Enter played the focused song, NVDA said only Playing
+track. about 0.2 seconds after Enter (the More menu took about 0.8 seconds), and
+focus stayed on the row. Album track lists were not tested live; they fall back
+to the More menu if the click check fails. Braille was not tested.
+
+Open AppleMusic-0.4.8.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.7
 
 Adds a search shortcut and readable names for cards Apple Music leaves unlabeled.
 
@@ -24,8 +43,6 @@ search, typing entered text, and a second press returned to the field. Control+3
 on the open Radio page went straight to Apple Music 1. Top Picks read Your
 Essentials. The Playlists Made for You row was covered by automated tests only.
 Braille was not tested.
-
-Open AppleMusic-0.4.7.nvda-addon to install, then restart NVDA.
 
 ## Earlier 0.4.6
 

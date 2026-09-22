@@ -69,7 +69,7 @@ class Node:
 
 
 def installStubs():
-    for name in ("api", "appModuleHandler", "controlTypes", "core", "eventHandler", "keyboardHandler",
+    for name in ("api", "appModuleHandler", "controlTypes", "core", "eventHandler", "keyboardHandler", "mouseHandler", "winUser",
                  "UIAHandler", "ui", "logHandler", "NVDAObjects", "NVDAObjects.UIA", "scriptHandler"):
         sys.modules[name] = types.ModuleType(name)
     sys.modules["appModuleHandler"].AppModule = type("AppModule", (), {"terminate": lambda self: None})
@@ -859,6 +859,43 @@ class SuggestLessTests(unittest.TestCase):
         self.drain()
         command.UIAInvokePattern.Invoke.assert_called_once()
         gesture.send.assert_not_called()
+
+    def clickableTrack(self, hitTitle=True):
+        self.trackFixture()
+        title = Node("STATICTEXT", "Example song")
+        title.location = (100, 200, 80, 20)
+        link = Node("LINK", "Artist")
+        link.location = (300, 200, 40, 20)
+        grid = Node("GROUPING", children=[link, title])
+        grid.parent, self.track.firstChild = self.track, grid
+        cover = Node("WINDOW", "Pop-up")
+        client = music.UIAHandler.handler.clientObject
+        client.ElementFromPointBuildCache = Mock(side_effect=lambda point, cache: (title if hitTitle else cover).BuildUpdatedCache(cache))
+        music.winUser.getCursorPos = Mock(return_value=[5, 6])
+        music.winUser.setCursorPos = Mock()
+        music.mouseHandler.doPrimaryClick = Mock()
+        self.focus = self.track
+        return title
+
+    def test_enter_on_track_double_clicks_its_title(self):
+        self.clickableTrack()
+        gesture = Mock()
+        self.app.script_playTrack(gesture)
+        self.drain()
+        self.assertEqual(music.mouseHandler.doPrimaryClick.call_count, 2)
+        self.assertEqual(music.winUser.setCursorPos.call_args_list[0].args, (110, 210))
+        self.assertEqual(music.winUser.setCursorPos.call_args_list[-1].args, (5, 6))
+        self.assertEqual(self.keys, [])
+        self.assertEqual(self.messages[-1], "Playing track.")
+        gesture.send.assert_not_called()
+
+    def test_covered_track_falls_back_to_play_menu(self):
+        self.clickableTrack(hitTitle=False)
+        self.app.script_playTrack(Mock())
+        self.tick()
+        self.tick()
+        music.mouseHandler.doPrimaryClick.assert_not_called()
+        self.assertEqual(self.keys, ["shift+f10"])
 
     def test_enter_on_other_control_passes_through(self):
         self.focus = Node("BUTTON", "Filter")

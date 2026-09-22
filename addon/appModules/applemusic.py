@@ -13,6 +13,7 @@ import time
 import re
 import unicodedata
 from collections import deque
+from ctypes.wintypes import POINT
 
 import api
 import appModuleHandler
@@ -20,8 +21,10 @@ import controlTypes
 import core
 import eventHandler
 import keyboardHandler
+import mouseHandler
 import UIAHandler
 import ui
+import winUser
 from logHandler import log
 from NVDAObjects.UIA import UIA
 from scriptHandler import script
@@ -191,6 +194,41 @@ def trackMoreButton(row, processID):
 			child = child.next
 		if child is not None:
 			return None
+	return None
+
+
+def trackClickPoint(row, processID):
+	"""A plain text cell of this row whose own centre hit-tests to that cell.
+
+	Double-clicking it plays the track. Links, buttons and anything covering the
+	row are never clicked: the point must resolve back to the same element.
+	"""
+	client = UIAHandler.handler.clientObject
+	pending = deque([row])
+	for unused in range(40):
+		if not pending:
+			return None
+		obj = pending.popleft()
+		if not isinstance(obj, UIA) or obj.processID != processID:
+			continue
+		if obj is not row and obj.role in ITEM_ROLES | MENU_ROLES | {Role.BUTTON, Role.SPLITBUTTON, Role.LINK}:
+			continue
+		if obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}:
+			continue
+		if obj.role == Role.STATICTEXT and obj.name and obj.firstChild is None:
+			left, top, width, height = obj.location
+			if width > 0 and height > 0:
+				x, y = left + min(10, width // 2), top + height // 2
+				hit = client.ElementFromPointBuildCache(POINT(x, y), UIAHandler.handler.baseCacheRequest)
+				if hit and tuple(hit.GetRuntimeId()) == tuple(obj.UIAElement.GetRuntimeId()):
+					return x, y
+			continue
+		child = obj.firstChild
+		for childIndex in range(40):
+			if child is None:
+				break
+			pending.append(child)
+			child = child.next
 	return None
 
 
@@ -1196,8 +1234,8 @@ class AppModule(appModuleHandler.AppModule):
 		self._operation = {"action": action, "original": None, "restore": False, "openedMenu": False}
 		if expectedFocus is not None:
 			self._operation["expectedFocus"] = tuple(expectedFocus.UIAElement.GetRuntimeId())
-		# Defer to avoid injecting keys inside the triggering script.
-		self._later(self._start)
+		# Defer to avoid injecting input inside the triggering script.
+		self._later(self._start, 1 if action == "play" else 100)
 
 	def _start(self):
 		focus = self._focus()
@@ -1308,6 +1346,8 @@ class AppModule(appModuleHandler.AppModule):
 					self._finish(f"Select only one song or album before using {self._action()['label']}.")
 					return
 				break
+		if self._operation["action"] == "play" and self._doubleClickTrack(item):
+			return
 		# Focus stays within this item; Shift+F10 is Apple's documented shortcut.
 		self._operation["target"] = tuple(item.UIAElement.GetRuntimeId())
 		if trackRow(item, self.processID) and revealTrack(item):
@@ -1315,12 +1355,36 @@ class AppModule(appModuleHandler.AppModule):
 			return
 		self._sendTrackMenu()
 
+	def _doubleClickTrack(self, item):
+		"""Play as a mouse user does: far faster than the More menu. Falls back to it."""
+		try:
+			point = trackClickPoint(item, self.processID)
+		except Exception:
+			log.debug("Apple Music: track click point unavailable", exc_info=True)
+			return False
+		if point is None:
+			return False
+		original = winUser.getCursorPos()
+		original = (original.x, original.y) if hasattr(original, "x") else tuple(original)
+		try:
+			winUser.setCursorPos(*point)
+			mouseHandler.doPrimaryClick()
+			mouseHandler.doPrimaryClick()
+		finally:
+			winUser.setCursorPos(*original)
+		log.debug("Apple Music: played track by double-click")
+		self._finish(self._action()["success"], restore=False)
+		return True
+
 	def _sendTrackMenu(self):
 		focus = self._focus()
 		item = focusedItem(focus, self.processID) if focus else None
 		expectedFocus = self._operation.get("expectedFocus")
 		if item is None or tuple(item.UIAElement.GetRuntimeId()) != self._operation["target"] or (expectedFocus is not None and tuple(focus.UIAElement.GetRuntimeId()) != expectedFocus):
 			self._finish("Apple Music command cancelled: focus changed.", restore=False)
+			return
+		# The row is scrolled into view now; a partly hidden row may be clickable.
+		if self._operation["action"] == "play" and self._doubleClickTrack(item):
 			return
 		# Some album/radio track rows ignore Shift+F10 while their own More
 		# button works. Resolve it after scrolling, since children may change.
