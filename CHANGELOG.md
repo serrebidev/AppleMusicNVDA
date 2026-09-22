@@ -3,6 +3,23 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.7
+
+- Adds Control+S: opens search and focuses the search field for typing, or
+  focuses the field directly when search is already open. A previous query is
+  selected so typing replaces it.
+- Control+1 now opens Home like Control+2 and Control+3 open New and Radio,
+  leaving focus on the page's first item. When the page is already open, they
+  focus its first item directly, since Enter does nothing there.
+- Replaces leaked internal card names such as
+  AMP.Services.CommonModels.LiveRadioGridLockup with the real title from Apple
+  Music's locally cached page data (for example Apple Music Hits), matched by
+  section title and position with an exact count check. Falls back to the card's
+  artists, or Live radio station.
+- Adds cached titles to Top Picks Made for You cards (for example Your Essentials).
+- 144 automated tests pass. Live NVDA MCP verified On Air Now names, Control+S,
+  and Control+3 on an already open page.
+
 ## Changes in 0.4.6
 
 - Skips known-closed Queue and Lyrics panels through their exact toggle controls,

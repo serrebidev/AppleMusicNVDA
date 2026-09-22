@@ -1,4 +1,33 @@
-# Apple Music 0.4.6
+# Apple Music 0.4.7
+
+Adds a search shortcut and readable names for cards Apple Music leaves unlabeled.
+
+- Control+S opens search and leaves focus in the search field, ready to type.
+  A previous query is selected, so typing replaces it.
+- Control+1 now opens Home, matching Control+2 and Control+3. All three land on
+  the page's first item, even when that page is already open.
+- Radio's On Air Now stations read their real names, such as Apple Music Hits,
+  instead of AMP.Services.CommonModels.LiveRadioGridLockup. Home's Made for You
+  playlists read their title and artists, such as Get Up!, featuring Brooks and
+  more. Apple Music draws these titles only in artwork, so the add-on takes them
+  from the page data Apple Music caches locally, matched by section and position.
+  If the data is missing or does not match, it says Live radio station or reads
+  the artists.
+
+- Home's Top Picks read the cached title of Made for You cards, such as Your
+  Essentials, Made for You, featuring Man With No Name and more.
+
+Validation: 144 automated tests pass. Live NVDA MCP testing on NVDA 2027.1: all
+six On Air Now cards read Apple Music 1, Apple Music Hits, Apple Music Country,
+Apple Música Uno, Apple Music Club, and Apple Music Chill. Control+S opened
+search, typing entered text, and a second press returned to the field. Control+3
+on the open Radio page went straight to Apple Music 1. Top Picks read Your
+Essentials. The Playlists Made for You row was covered by automated tests only.
+Braille was not tested.
+
+Open AppleMusic-0.4.7.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.6
 
 Makes section navigation faster and adds direct sidebar and account shortcuts.
 
@@ -13,8 +42,6 @@ Validation: 132 automated tests pass. Live NVDA MCP testing on NVDA 2027.1:
 F6 from a 14,363-track list to Search took 0.123 seconds (was 2.32 seconds).
 Control+2 and Control+3 opened New and Radio, Control+4 and Control+5 expanded
 Library and Playlists, and Control+6 opened Settings. Braille was not tested.
-
-Open AppleMusic-0.4.6.nvda-addon to install, then restart NVDA.
 
 ## Earlier 0.4.5
 

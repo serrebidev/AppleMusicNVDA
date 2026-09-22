@@ -54,7 +54,8 @@ These are the add-on's default shortcuts.
 | --- | --- |
 | F6 | Move to the next available section. |
 | Shift+F6 | Move to the previous available section. |
-| Control+1 | Focus Home in the sidebar without opening it. |
+| Control+1 | Open Home. |
+| Control+S | Open search and focus the search field so you can type. A previous query is selected, so typing replaces it. |
 | Control+2 | Open New. |
 | Control+3 | Open Radio. |
 | Control+4 | Open Library. |
@@ -77,9 +78,19 @@ Lyrics. **Shift+F6** moves in reverse. Navigation wraps around and skips hidden
 or unavailable sections. Closed Queue and Lyrics panels are detected from their
 toggle state so long playlists do not need a full control scan before Search.
 
-Press **Control+1** to focus Home without opening it. **Control+2** through
-**Control+5** open New, Radio, Library, or Playlists. **Control+6** opens the
-account menu and then Settings.
+**Control+1** through **Control+3** open Home, New, or Radio and leave you on
+the first item of the page, even when that page is already open. **Control+4** and **Control+5** open the Library or
+Playlists list so you can choose a page. **Control+6** opens the account menu and
+then Settings. **Control+S** opens search and leaves you in the search field,
+ready to type. Any previous query is selected, so typing replaces it.
+
+Some cards, such as Radio's On Air Now stations and Home's Made for You
+playlists, draw their titles only in artwork. Apple Music reports an internal
+name such as AMP.Services.CommonModels.LiveRadioGridLockup for them. The add-on
+reads the real title, such as Apple Music Hits or Get Up!, from the page data
+Apple Music has cached on your computer, matched by section and position. If
+that data is missing or does not match the page, it falls back to the card's
+artists, or Live radio station.
 
 The add-on remembers the last control you left in each section. Moving between
 sections does not activate buttons or start playback. Use **Tab** or the arrow

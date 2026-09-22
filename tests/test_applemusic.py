@@ -3,13 +3,16 @@ import importlib.util
 from pathlib import Path
 import sys
 import types
+import os
 import unittest
-from unittest.mock import Mock
+from unittest.mock import patch, Mock
 
 
 class Node:
     counter = 0
     isPresentableFocusAncestor = True
+    value = ""
+    positionInfo = None
 
     @property
     def name(self):
@@ -74,7 +77,7 @@ def installStubs():
         name: name for name in ("LISTITEM", "TABLEROW", "DATAITEM", "POPUPMENU", "MENUITEM", "TREEVIEWITEM", "WINDOW", "BUTTON", "TOGGLEBUTTON", "SPLITBUTTON", "PANE", "GROUPING", "LIST", "DOCUMENT", "TREEVIEW", "EDITABLETEXT", "TOOLBAR", "SLIDER", "DIALOG", "TITLEBAR", "MENUBAR", "STATICTEXT", "LINK", "GRAPHIC")
     })
     sys.modules["controlTypes"].State = types.SimpleNamespace(**{
-        name: name for name in ("INVISIBLE", "OFFSCREEN", "UNAVAILABLE", "CHECKED")
+        name: name for name in ("INVISIBLE", "OFFSCREEN", "UNAVAILABLE", "CHECKED", "SELECTED")
     })
     sys.modules["NVDAObjects.UIA"].UIA = Node
     sys.modules["scriptHandler"].script = lambda **kwargs: lambda function: function
@@ -87,6 +90,8 @@ def installStubs():
 
 
 music = installStubs()
+# Never read the real Apple Music cache on the test machine.
+music.SHELF_CACHE = os.path.join(os.path.dirname(__file__), "no-apple-music-cache")
 
 
 class SuggestLessTests(unittest.TestCase):
@@ -1001,14 +1006,67 @@ class SuggestLessTests(unittest.TestCase):
         self.drain()
         self.assertIs(self.focus, queueItem)
 
-    def test_control_1_focuses_home_without_activating_it(self):
+    def test_control_1_opens_home(self):
         home = Node("LISTITEM", "Home")
         home.cachedAutomationId = "Sidebar_Home"
         home.setFocus.side_effect = lambda: setattr(self, "focus", home)
         self.selected = [home]
         self.app.script_focusHome(None)
         self.assertIs(self.focus, home)
-        home.UIAInvokePattern.Invoke.assert_not_called()
+        self.drain()
+        self.assertEqual(self.keys, ["enter"])
+
+    def test_control_3_on_open_radio_page_lands_on_first_card(self):
+        radio = Node("LISTITEM", "Radio")
+        radio.cachedAutomationId = "Sidebar_Radio"
+        radio.states.add("SELECTED")
+        card = Node("LISTITEM", "Apple Music 1")
+        card.setFocus.side_effect = lambda: setattr(self, "focus", card)
+        player = Node("GROUPING")
+        player.cachedAutomationId = "TransportBar"
+        player.FindFirstBuildCache = Mock(side_effect=AssertionError("searched the player"))
+        content = Node("GROUPING", "Radio")
+        content.FindFirstBuildCache = lambda scope, condition, cache: card.BuildUpdatedCache(cache)
+        self.selected = [radio]
+        self.root.FindAllBuildCache = lambda *args: types.SimpleNamespace(
+            Length=2, GetElement=[player, content].__getitem__)
+        self.app.script_focusRadio(None)
+        self.drain()
+        self.assertIs(self.focus, card)
+        self.assertEqual(self.keys, [])
+
+    def test_control_s_presses_search_button(self):
+        button = Node("BUTTON", "Click to search")
+        button.cachedAutomationId = "Search_Button"
+        button.setFocus.side_effect = lambda: setattr(self, "focus", button)
+        self.selected = [button]
+        self.app.script_focusSearch(None)
+        self.assertIs(self.focus, button)
+        self.drain()
+        self.assertEqual(self.keys, ["enter"])
+
+    def test_control_s_focuses_open_search_field_and_selects_old_query(self):
+        field = Node("EDITABLETEXT", "Search")
+        field.cachedAutomationId = "TextBox"
+        field.value = "abba"
+        field.setFocus.side_effect = lambda: setattr(self, "focus", field)
+        self.selected = [field]
+        self.app.script_focusSearch(None)
+        self.assertIs(self.focus, field)
+        self.drain()
+        self.assertEqual(self.keys, ["control+a"])
+
+    def test_control_s_leaves_empty_new_search_field_alone(self):
+        button = Node("BUTTON", "Click to search")
+        button.cachedAutomationId = "Search_Button"
+        button.setFocus.side_effect = lambda: setattr(self, "focus", button)
+        field = Node("EDITABLETEXT", "Search")
+        self.selected = [button]
+        self.onKey = lambda key: setattr(self, "focus", field) if key == "enter" else None
+        self.app.script_focusSearch(None)
+        self.drain()
+        self.assertIs(self.focus, field)
+        self.assertEqual(self.keys, ["enter"])
 
     def test_control_1_reports_missing_home(self):
         self.selected = []
@@ -1339,6 +1397,74 @@ class HomeReadingTests(unittest.TestCase):
             Node("GROUPING", "Top Picks for You", children=[Node("LIST", children=[card])])
         ])
         return card
+
+    def onAirCard(self, index, count=6):
+        card = music.HomeCard("LISTITEM", "AMP.Services.CommonModels.LiveRadioGridLockup",
+                              children=[Node("GRAPHIC", "")])
+        card.cachedClassName = "GridViewItem"
+        card.positionInfo = {"indexInGroup": index, "similarItemsInGroup": count}
+        Node("GROUPING", "Radio", children=[
+            Node("GROUPING", "On Air Now", children=[Node("LIST", children=[card])])
+        ])
+        return card
+
+    def test_on_air_card_uses_apple_music_cached_station_name(self):
+        stations = ["Apple Music 1", "Apple Music Hits", "Apple Music Country",
+                    "Apple Música Uno", "Apple Music Club", "Apple Music Chill"]
+        with patch.object(music, "cachedShelves", return_value={"On Air Now": stations}):
+            self.assertEqual(self.onAirCard(2)._get_name(), "Apple Music Hits")
+            self.assertEqual(self.onAirCard(6)._get_name(), "Apple Music Chill")
+
+    def test_cached_name_ignored_when_shelf_size_differs(self):
+        with patch.object(music, "cachedShelves", return_value={"On Air Now": ["Apple Music 1"]}):
+            self.assertEqual(self.onAirCard(1)._get_name(), "Live radio station")
+
+    def test_poster_gets_cached_title_and_artists(self):
+        card = self.card("AMP.Services.CommonModels.TallArtworkPosterLockup",
+                         [Node("STATICTEXT", "Brooks, 4 Strings and more")])
+        card.positionInfo = {"indexInGroup": 2, "similarItemsInGroup": 2}
+        with patch.object(music, "cachedShelves", return_value={"Top Picks for You": ["Your Essentials", "Get Up!"]}):
+            self.assertEqual(card._get_name(), "Get Up!, featuring Brooks, 4 Strings and more")
+
+    def test_made_for_you_artist_card_gets_cached_title(self):
+        subtitle = Node("STATICTEXT", "Man With No Name, The WLT and more")
+        subtitle.cachedAutomationId = "SubtitleTextBlock"
+        card = self.card(children=[Node("STATICTEXT", "Made for You"), subtitle])
+        card.positionInfo = {"indexInGroup": 2, "similarItemsInGroup": 2}
+        with patch.object(music, "cachedShelves", return_value={"Top Picks for You": ["Prism Journey", "Your Essentials"]}):
+            self.assertEqual(card._get_name(),
+                             "Your Essentials, Made for You, featuring Man With No Name, The WLT and more")
+
+    def test_shelf_names_parse_editorial_and_recommendation_responses(self):
+        grouping = {"resources": {
+            "editorial-elements": {
+                "1": {"attributes": {"title": "On Air Now"}, "relationships": {"children": {"data": [
+                    {"id": "2", "type": "editorial-elements"}]}}},
+                "2": {"relationships": {"contents": {"data": [{"id": "ra.1", "type": "stations"}]}}},
+            },
+            "stations": {"ra.1": {"attributes": {"name": "Apple Music 1"}}},
+        }}
+        recommendations = {"resources": {
+            "personal-recommendation": {"r": {
+                "attributes": {"title": {"stringForDisplay": "Playlists Made for You"}},
+                "relationships": {"contents": {"data": [{"id": "pl.1", "type": "playlists"}]}}}},
+            "playlists": {"pl.1": {"attributes": {"name": "Get Up!"}}},
+        }}
+        self.assertEqual(music.shelfNamesFromResponse(grouping), {"On Air Now": ["Apple Music 1"]})
+        self.assertEqual(music.shelfNamesFromResponse(recommendations), {"Playlists Made for You": ["Get Up!"]})
+
+    def test_type_name_radio_card_reads_as_live_station(self):
+        card = self.card("AMP.Services.CommonModels.LiveRadioGridLockup",
+                         [Node("GRAPHIC", "")], home=False)
+        self.assertEqual(card._get_name(), "Live radio station")
+
+    def test_type_name_poster_reads_its_artists(self):
+        card = self.card("AMP.Services.CommonModels.TallArtworkPosterLockup",
+                         [Node("STATICTEXT", "Brooks, 4 Strings, Roman Messer and more")])
+        self.assertEqual(card._get_name(), "Featuring Brooks, 4 Strings, Roman Messer and more")
+
+    def test_unknown_empty_type_name_is_untitled(self):
+        self.assertEqual(self.card("AMP.Services.CommonModels.NewLockup", home=False)._get_name(), "Untitled item")
 
     def test_card_announces_title_artist_and_category(self):
         card = self.card("New Release 2026", [Node("GROUPING", children=[

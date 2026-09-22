@@ -26,10 +26,19 @@ keys within sections. Switching sections changes focus without activating contro
 Closed Queue and Lyrics panels are skipped from their toggle state, avoiding a
 full playlist scan before Search. Fallback discovery remains available when Apple
 Music does not expose a reliable panel state.</p>
-<p>Press <strong>Control+1</strong> to focus Home without opening it.
-<strong>Control+2</strong> through <strong>Control+5</strong> open New, Radio,
-Library, or Playlists. <strong>Control+6</strong> opens Settings through the
-account menu.</p>
+<p><strong>Control+1</strong> through <strong>Control+3</strong> open Home, New,
+or Radio and leave you on the first item of the page, even when that page is
+already open. <strong>Control+4</strong>
+and <strong>Control+5</strong> open the Library or Playlists list.
+<strong>Control+6</strong> opens Settings through the account menu.
+<strong>Control+S</strong> opens search and leaves you in the search field, ready
+to type. Any previous query is selected, so typing replaces it.</p>
+<p>Cards whose titles exist only in artwork, such as Radio's On Air Now stations,
+are reported by Apple Music with internal names such as
+AMP.Services.CommonModels.LiveRadioGridLockup. The add-on reads the real title,
+such as Apple Music Hits, from the page data Apple Music caches on your computer,
+matched by section and position. If that data is missing or does not match the
+page, it falls back to the card's artists, or Live radio station.</p>
 <p>Close menus and dialogs before switching sections. Detection uses English
 accessible names and roles. Queue and Lyrics need named accessible containers;
 unsupported controls are grouped into Main content.</p>
@@ -82,7 +91,7 @@ command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
 <h2>Requirements and limitations</h2>
 <p>This version targets NVDA 2025.1 through 2027.1 and English Apple Music
 menu labels. No AutoHotkey or external UI Automation library is needed.
-Version 0.4.6 passes 132 simulated-control tests. Live NVDA MCP testing on NVDA
+Version 0.4.7 passes 144 simulated-control tests. Live NVDA MCP testing on NVDA
 2027.1 confirmed settled Home and End announcements in a 229-track playlist;
 Page Up and Page Down also matched refreshed focus reports. Fresh braille testing,
 full album transitions, and open Queue/Lyrics cycling still need testing.</p>

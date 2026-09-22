@@ -6,6 +6,9 @@ All UI operations run on NVDA's main thread. Timed polls let NVDA process
 focus events without sleeping. Menus are matched by name; toggles check state.
 """
 
+import glob
+import json
+import os
 import time
 import re
 import unicodedata
@@ -414,7 +417,12 @@ def homeCardName(card, original):
 		subtitle = subtitles[0]
 		if "," in subtitle and subtitle.casefold().endswith(" and more"):
 			subtitle = "featuring " + subtitle
-		return f"{base}, {subtitle}"
+		try:
+			title = cachedCardTitle(card)
+		except Exception:
+			log.debug("Apple Music: cached card title unavailable", exc_info=True)
+			title = None
+		return ", ".join(part for part in (title, base, subtitle) if part)
 	parts = []
 	for label in labels + [base]:
 		if not label or any(contains(part, label) for part in parts):
@@ -428,16 +436,117 @@ def homeCardName(card, original):
 	return ", ".join(parts)
 
 
+# Kinds stated by the provider's own type name. Titles drawn only in artwork
+# are not exposed, so nothing more specific is claimed.
+PLACEHOLDER_KINDS = {"LiveRadioGridLockup": "Live radio station"}
+
+
+def placeholderType(name):
+	"""Apple Music leaks .NET type names such as AMP.Services.CommonModels.X as card names."""
+	match = re.fullmatch(r"(?:[A-Za-z_]\w*\.){2,}([A-Za-z_]\w*)", name or "")
+	return match[1] if match else None
+
+
+# Apple Music's WebView caches its own API responses (the pages it is showing).
+# ponytail: position-based match per shelf title; exact-count check guards against stale caches.
+SHELF_CACHE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages", "AppleInc.AppleMusicWin_*", "AC", "INetCache", "*")
+_shelfCache = {"key": None, "shelves": {}}
+
+
+def shelfNamesFromResponse(data):
+	"""Map each shelf title to its item names, in display order."""
+	resources = data.get("resources") or {}
+
+	def resolve(ref):
+		return (resources.get(ref.get("type")) or {}).get(ref.get("id")) or ref
+
+	def itemName(ref):
+		return (resolve(ref).get("attributes") or {}).get("name")
+
+	shelves = {}
+	for group in resources.values():
+		for resource in group.values():
+			title = (resource.get("attributes") or {}).get("title")
+			if isinstance(title, dict):
+				title = title.get("stringForDisplay")
+			if not isinstance(title, str) or not title.strip():
+				continue
+			relations = resource.get("relationships") or {}
+			names = [itemName(ref) for ref in (relations.get("contents") or {}).get("data") or []]
+			if not names:
+				# Editorial shelves such as On Air Now wrap each item in a child element.
+				for child in (relations.get("children") or {}).get("data") or []:
+					contents = ((resolve(child).get("relationships") or {}).get("contents") or {}).get("data") or []
+					names.append(itemName(contents[0]) if contents else None)
+			if names:
+				shelves[" ".join(title.split())] = names
+	return shelves
+
+
+def cachedShelves():
+	files = []
+	for pattern in ("groupings*.json", "recommendations*.json"):
+		for path in glob.glob(os.path.join(SHELF_CACHE, pattern)):
+			try:
+				files.append((os.path.getmtime(path), path))
+			except OSError:
+				pass
+	files.sort()
+	key = tuple(files)
+	if key != _shelfCache["key"]:
+		shelves = {}
+		for unused, path in files:  # Oldest first so newer responses win.
+			try:
+				with open(path, encoding="utf-8") as file:
+					shelves.update(shelfNamesFromResponse(json.load(file)))
+			except (OSError, ValueError, AttributeError, TypeError):
+				log.debug("Apple Music: unreadable cache %s", path, exc_info=True)
+		_shelfCache.update(key=key, shelves=shelves)
+	return _shelfCache["shelves"]
+
+
+def cachedCardTitle(card):
+	"""Apple Music's own title for a card whose accessible name is a type name."""
+	section = None
+	for parent in ancestors(card):
+		if parent is not card and parent.role == Role.GROUPING and parent.name:
+			section = " ".join(parent.name.split())
+			break
+	info = card.positionInfo or {}
+	index, count = info.get("indexInGroup"), info.get("similarItemsInGroup")
+	names = cachedShelves().get(section) if section else None
+	if not names or not index or count != len(names) or not 1 <= index <= len(names):
+		return None
+	name = names[index - 1]
+	return " ".join(name.split()) if isinstance(name, str) and name.strip() else None
+
+
 class HomeCard(UIA):
 	def _get_name(self):
 		original = super().name
+		kind = placeholderType(original)
+		if kind is not None:
+			original = ""
 		try:
-			if homeContent(self):
-				return homeCardName(self, original)
+			if kind is not None or homeContent(self):
+				name = homeCardName(self, original)
+				if kind is None:
+					return name
+				if name.casefold().endswith(" and more") and "," in name:
+					name = "featuring " + name
+				try:
+					title = cachedCardTitle(self)
+				except Exception:
+					log.debug("Apple Music: cached card title unavailable", exc_info=True)
+					title = None
+				title = title or PLACEHOLDER_KINDS.get(kind)
+				if title is None and name:
+					name = name[0].upper() + name[1:]
+				return ", ".join(part for part in (title, name) if part) or "Untitled item"
 		except Exception:
 			# Virtualized cards may disappear during a property read.
 			log.debug("Apple Music: Home card text unavailable", exc_info=True)
-		return original
+		return PLACEHOLDER_KINDS.get(kind, "Untitled item") if kind is not None else original
 
 
 class HomeGrouping(UIA):
@@ -704,7 +813,27 @@ class AppModule(appModuleHandler.AppModule):
 
 		core.callLater(50, press)
 
-	def _focusSidebarControl(self, identifier, label, activate=False):
+	def _firstContentItem(self, root):
+		"""The first focusable item in the page, where Apple Music lands after navigation."""
+		client = UIAHandler.handler.clientObject
+		# The page landmark is named after the page (Radio, Content); the other one is the player.
+		landmarks = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, client.CreatePropertyCondition(
+			UIAHandler.UIA_ClassNamePropertyId, "LandmarkTarget",
+		), UIAHandler.handler.baseCacheRequest)
+		content = next((
+			element for element in (landmarks.GetElement(index) for index in range(landmarks.Length if landmarks else 0))
+			if element.cachedAutomationId != "TransportBar"
+		), None)
+		if not content:
+			return None
+		item = content.FindFirstBuildCache(UIAHandler.TreeScope_Descendants, client.CreateAndCondition(
+			client.CreatePropertyCondition(UIAHandler.UIA_IsKeyboardFocusablePropertyId, True),
+			client.CreatePropertyCondition(UIAHandler.UIA_ControlTypePropertyId, UIAHandler.UIA_ListItemControlTypeId),
+		), UIAHandler.handler.baseCacheRequest)
+		obj = UIA(UIAElement=item) if item else None
+		return obj if obj is not None and obj.processID == self.processID else None
+
+	def _focusSidebarControl(self, identifier, label, activate=False, valid=isSidebarItem, openPage=False):
 		self._trackFocusGeneration += 1
 		self._navigationGeneration += 1
 		generation = self._navigationGeneration
@@ -717,9 +846,15 @@ class AppModule(appModuleHandler.AppModule):
 			client = UIAHandler.handler.clientObject
 			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
 			control = self._controlByID(root, identifier)
-			if control is None or not isSidebarItem(control):
+			if control is None or not valid(control):
 				ui.message(f"Apple Music's {label} option is unavailable.")
 				return
+			if openPage and State.SELECTED in control.states:
+				# Enter does nothing on the page already shown; land where opening it would.
+				item = self._firstContentItem(root)
+				if item is not None:
+					item.setFocus()
+					return
 			targetID = tuple(control.UIAElement.GetRuntimeId())
 			self._manualSectionTarget = targetID
 			control.setFocus()
@@ -730,17 +865,51 @@ class AppModule(appModuleHandler.AppModule):
 		if activate:
 			self._enterWhenFocused(targetID, generation)
 
-	@script(description="Focus Home in the Apple Music sidebar", gesture="kb:control+1")
+	@script(description="Open Home in the Apple Music sidebar", gesture="kb:control+1")
 	def script_focusHome(self, gesture):
-		self._focusSidebarControl("Sidebar_Home", "Home")
+		self._focusSidebarControl("Sidebar_Home", "Home", activate=True, openPage=True)
+
+	@script(description="Open Apple Music search and focus the search field", gesture="kb:control+s")
+	def script_focusSearch(self, gesture):
+		# An open search replaces Search_Button with its edit field (AutomationId TextBox).
+		def isSearchField(obj):
+			return obj.role == Role.EDITABLETEXT and normalizedName(obj.name) == "search"
+		try:
+			root = UIAHandler.handler.clientObject.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+			field = self._controlByID(root, "TextBox") if self._active() else None
+		except Exception:
+			field = None
+		if field is not None and isSearchField(field):
+			self._focusSidebarControl("TextBox", "Search", valid=isSearchField)
+		else:
+			# Enter on the button opens search with the edit field focused.
+			self._focusSidebarControl("Search_Button", "Search", activate=True, valid=lambda obj: obj.role == Role.BUTTON)
+		generation = self._navigationGeneration
+
+		def selectOldQuery(attempt=0):
+			# Select a previous query so typing replaces it.
+			if generation != self._navigationGeneration or not self._active():
+				return
+			try:
+				focus = self._focus()
+				if focus is not None and isSearchField(focus):
+					if focus.value:
+						keyboardHandler.KeyboardInputGesture.fromName("control+a").send()
+					return
+			except Exception:
+				log.debug("Apple Music: search field unavailable", exc_info=True)
+			if attempt < 8:
+				core.callLater(100, lambda: selectOldQuery(attempt + 1))
+
+		core.callLater(100, selectOldQuery)
 
 	@script(description="Open New in the Apple Music sidebar", gesture="kb:control+2")
 	def script_focusNew(self, gesture):
-		self._focusSidebarControl("Sidebar_New", "New", activate=True)
+		self._focusSidebarControl("Sidebar_New", "New", activate=True, openPage=True)
 
 	@script(description="Open Radio in the Apple Music sidebar", gesture="kb:control+3")
 	def script_focusRadio(self, gesture):
-		self._focusSidebarControl("Sidebar_Radio", "Radio", activate=True)
+		self._focusSidebarControl("Sidebar_Radio", "Radio", activate=True, openPage=True)
 
 	@script(description="Open Library in the Apple Music sidebar", gesture="kb:control+4")
 	def script_focusLibrary(self, gesture):

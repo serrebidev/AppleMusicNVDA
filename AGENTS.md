@@ -36,6 +36,10 @@
 - Section navigation moves focus without activating controls. Respect user
   focus changes and cancel pending actions when Apple Music loses the foreground.
 - Preserve meaningful names for both speech and braille. Do not invent titles
-  that Apple Music does not expose through accessibility.
+  that Apple Music does not expose through accessibility. The one exception:
+  cards Apple Music names with an internal type name (AMP.Services...) may use
+  Apple Music's own cached API responses in its INetCache, matched by shelf
+  title and position, and only when the shelf sizes are equal. Never guess from
+  OCR, artwork, or position alone.
 - Keep runtime dependencies within NVDA and Python's standard library unless a
   requested feature requires otherwise.
