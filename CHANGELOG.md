@@ -3,6 +3,16 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.10
+
+- From player controls, favorite, remove favorite and Suggest Less find the
+  player's More button by its ActionButton ID in one lookup instead of scanning
+  nearby controls (about 1.1 seconds in user logs). The scan remains a fallback.
+- NVDA stays silent while these commands move focus, including the player's
+  Action button and song grouping; only the result is spoken.
+- 152 automated tests pass. Live NVDA MCP verified player-route add, remove and
+  Already a favorite with only the result spoken.
+
 ## Changes in 0.4.9
 
 - Enter on a track no longer says Playing track.

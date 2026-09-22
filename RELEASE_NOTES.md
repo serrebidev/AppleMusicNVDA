@@ -1,4 +1,20 @@
-# Apple Music 0.4.9
+# Apple Music 0.4.10
+
+Faster, quieter favorites and Suggest Less from the player.
+
+- From player controls, the add-on finds the player's More (Action) button
+  directly instead of searching nearby controls, which took about a second.
+- NVDA no longer reads the Action button, the song or Pop-up window while the
+  command runs; you hear only the result, and focus returns to your control.
+
+Validation: 152 automated tests pass. Live NVDA MCP testing on NVDA 2027.1 from
+the Action and Repeat buttons: favorite, remove favorite and Already a favorite
+spoke only the result, focus returned to the original button, and the player
+menu confirmed each change. Braille was not tested.
+
+Open AppleMusic-0.4.10.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.9
 
 Faster, quieter favorites, and a way to remove them.
 
@@ -16,8 +32,6 @@ showed Favourited checked. Control+Alt+Shift+Up said only Removed from favorites
 and the menu showed Favourite unchecked. On a non-favorite it said only Not a
 favorite. The fixed waits of 100 and 200 ms are gone and the menu is checked
 every 50 ms; exact timings were not captured. Braille was not tested.
-
-Open AppleMusic-0.4.9.nvda-addon to install, then restart NVDA.
 
 ## Earlier 0.4.8
 

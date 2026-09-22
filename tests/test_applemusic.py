@@ -909,6 +909,27 @@ class SuggestLessTests(unittest.TestCase):
             self.until(lambda: "control+l" in self.keys)
             action.UIAInvokePattern.Invoke.assert_not_called()
 
+    def test_player_action_button_is_used_directly_and_quietly(self):
+        pause = self.focus = Node("BUTTON", "Pause")
+        action = Node("BUTTON", "Action")
+        action.cachedAutomationId = "ActionButton"
+        Node("GROUPING", children=[action]).cachedAutomationId = "TransportBar"
+        self.selected = [action]
+        spoken = Mock()
+        favourite = Node("MENUITEM", "Favourite")
+        action.UIAInvokePattern.Invoke.side_effect = lambda: (
+            self.app.event_gainFocus(action, spoken), self.openMenu(favourite))
+        self.app.script_favorite(None)
+        self.tick()
+        action.UIAInvokePattern.Invoke.assert_called_once_with()
+        self.assertNotIn("control+l", self.keys)
+        self.drain()
+        favourite.UIAInvokePattern.Invoke.assert_called_once_with()
+        pause.setFocus.assert_called_once_with()
+        self.app.event_gainFocus(pause, spoken)
+        spoken.assert_not_called()
+        self.assertEqual(self.messages[-1], "Added to favorites.")
+
     def trackFixture(self):
         self.track = Node("LISTITEM", "Track 1 Example song Artist Album 3 minutes")
         self.trackList = Node("LIST", children=[self.track])

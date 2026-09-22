@@ -663,26 +663,21 @@ class AppModule(appModuleHandler.AppModule):
 		self._trackPage = page
 
 	def _quietFocus(self, obj):
-		"""Menu traffic and the return to the original control say nothing new."""
-		if not isinstance(obj, UIA):
-			return False
-		operation = self._operation
-		if operation is not None and operation.get("openedMenu"):
-			if focusedMenu(obj, self.processID) or (obj.role == Role.WINDOW and normalizedName(obj.name) in {"pop-up", "popup"}):
-				return True
+		"""The add-on moves focus through menus and back; only its result is news."""
 		quiet = getattr(self, "_quietReturn", None)
-		if quiet is not None:
+		if quiet is not None and isinstance(obj, UIA):
 			identity, containers, deadline = quiet
+			focused = tuple(obj.UIAElement.GetRuntimeId())
 			if time.monotonic() >= deadline:
 				self._quietReturn = None
-				return False
-			focused = tuple(obj.UIAElement.GetRuntimeId())
-			if focused == identity:
+			elif focused == identity:
 				self._quietReturn = None
 				return True
-			# Apple Music refocuses the row's list and grouping on the way back.
-			return focused in containers
-		return False
+			elif focused in containers:
+				# Apple Music refocuses the row's list and grouping on the way back.
+				return True
+		# A user focus change still cancels the command on its next check.
+		return self._operation is not None
 
 	def _quietenReturn(self, original=None):
 		"""Apple Music refocuses the original control as soon as a menu command runs."""
@@ -703,10 +698,8 @@ class AppModule(appModuleHandler.AppModule):
 		if quiet is not None and isinstance(obj, UIA) and time.monotonic() < quiet[2]:
 			if tuple(obj.UIAElement.GetRuntimeId()) in quiet[1]:
 				return
-		operation = self._operation
-		if operation is not None and operation.get("openedMenu") and isinstance(obj, UIA):
-			if obj.role in MENU_ROLES or (obj.role == Role.WINDOW and normalizedName(obj.name) in {"pop-up", "popup"}):
-				return
+		if self._operation is not None:
+			return
 		nextHandler()
 
 	def event_gainFocus(self, obj, nextHandler):
@@ -1324,9 +1317,40 @@ class AppModule(appModuleHandler.AppModule):
 		if focus.role in {Role.BUTTON, Role.SPLITBUTTON} and normalizedName(focus.name) in MORE_NAMES:
 			self._usePlayerMore(focus)
 			return
+		# The player's More button has a stable ID; one lookup beats scanning.
+		more = self._playerActionButton()
+		if more is not None:
+			self._usePlayerMore(more)
+			return
 		self._operation["playerSearch"] = playerMoreSteps(focus, self.processID)
 		self._operation["searchDeadline"] = time.monotonic() + 3.0
 		self._findPlayerMore()
+
+	def _playerActionButton(self):
+		"""The one visible ActionButton in the player, never a row's or an ambiguous one."""
+		try:
+			client = UIAHandler.handler.clientObject
+			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+			elements = root.FindAllBuildCache(
+				UIAHandler.TreeScope_Descendants,
+				client.CreatePropertyCondition(UIAHandler.UIA_AutomationIdPropertyId, "ActionButton"),
+				UIAHandler.handler.baseCacheRequest,
+			)
+			buttons = [
+				obj for obj in (UIA(UIAElement=elements.GetElement(index)) for index in range(elements.Length if elements else 0))
+				if obj.UIAElement.cachedAutomationId == "ActionButton" and obj.processID == self.processID
+			]
+		except Exception:
+			log.debug("Apple Music: player Action button lookup failed", exc_info=True)
+			return None
+		if len(buttons) != 1:
+			return None
+		more = buttons[0]
+		if more.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} or not more.UIAInvokePattern:
+			return None
+		if normalizedName(more.name) not in MORE_NAMES or sectionFor(more, self.processID) != "Player":
+			return None
+		return more
 
 	def _findPlayerMore(self):
 		try:
