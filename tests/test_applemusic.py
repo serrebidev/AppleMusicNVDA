@@ -66,7 +66,7 @@ class Node:
 
 
 def installStubs():
-    for name in ("api", "appModuleHandler", "controlTypes", "core", "keyboardHandler",
+    for name in ("api", "appModuleHandler", "controlTypes", "core", "eventHandler", "keyboardHandler",
                  "UIAHandler", "ui", "logHandler", "NVDAObjects", "NVDAObjects.UIA", "scriptHandler"):
         sys.modules[name] = types.ModuleType(name)
     sys.modules["appModuleHandler"].AppModule = type("AppModule", (), {"terminate": lambda self: None})
@@ -130,6 +130,7 @@ class SuggestLessTests(unittest.TestCase):
         music.UIAHandler.UIA_ScrollItemPatternId = 10017
         music.UIAHandler.IUIAutomationScrollItemPattern = object()
         music.core.callLater = lambda delay, callback: self.pending.append(callback)
+        music.eventHandler.queueEvent = Mock()
         music.ui.message = self.messages.append
 
         def send(key):
@@ -881,6 +882,39 @@ class SuggestLessTests(unittest.TestCase):
         self.app.event_gainFocus(self.focus, Mock())
         self.drain()
         self.assertIs(self.focus, self.track)
+
+    def test_home_end_reports_refreshed_virtualized_track(self):
+        self.trackFixture()
+        self.focus = self.track
+        gesture = Mock()
+        self.app.script_trackBoundary(gesture)
+        gesture.send.assert_called_once_with()
+        target = Node("LISTITEM", "Track 1 stale song Artist Album 3 minutes")
+        target.parent = self.trackList
+        self.focus = target
+        nextHandler = Mock()
+        self.app.event_gainFocus(target, nextHandler)
+        nextHandler.assert_not_called()
+        target.name = "Track 1 final song Artist Album 3 minutes"
+        self.tick()
+        music.eventHandler.queueEvent.assert_called_once_with("gainFocus", target)
+
+    def test_home_end_cancels_refresh_after_another_focus_event(self):
+        self.trackFixture()
+        self.focus = self.track
+        self.app.script_trackBoundary(Mock())
+        target = Node("LISTITEM", "Track 2 target song Artist Album 3 minutes")
+        target.parent = self.trackList
+        self.focus = target
+        self.app.event_gainFocus(target, Mock())
+        changed = Node("LISTITEM", "Track 3 changed song Artist Album 3 minutes")
+        changed.parent = self.trackList
+        self.focus = changed
+        nextHandler = Mock()
+        self.app.event_gainFocus(changed, nextHandler)
+        nextHandler.assert_called_once_with()
+        self.tick()
+        music.eventHandler.queueEvent.assert_not_called()
 
     def test_duration_in_sidebar_name_is_not_a_track(self):
         sidebar = Node("LISTITEM", "My playlist 3 minutes, 49 seconds")

@@ -36,7 +36,7 @@ Grab the latest build from the
 For a version-by-version history, see the [changelog](CHANGELOG.md).
 
 You need NVDA and the Windows Apple Music app. The current compatibility
-metadata targets NVDA 2025.1 through 2026.1. English Apple Music menus are
+metadata targets NVDA 2025.1 through 2027.1. English Apple Music menus are
 supported, including both Favorite and Favourite spellings.
 
 1. Download the `.nvda-addon` file.
@@ -54,6 +54,7 @@ These are the add-on's default shortcuts.
 | --- | --- |
 | F6 | Move to the next available section. |
 | Shift+F6 | Move to the previous available section. |
+| Home or End | Move to the first or last track. |
 | Enter or Numpad Enter | Play the focused track row. Other controls keep their normal Enter action. |
 | Control+Alt+Up Arrow | Favorite the focused song or album, or the current song from player controls. |
 | Control+Alt+Down Arrow | Suggest less of the focused song or album, or the current song from player controls. |
@@ -78,6 +79,10 @@ keys within a section, and close any open menu or dialog before switching sectio
 When you open a supported album or playlist track list, the add-on focuses a
 track and brings it into view. This may be the previously selected track.
 **F6** also prefers tracks over header controls when moving to Main content.
+
+Press **Home** or **End** on a track row to move to the first or last track.
+The add-on waits briefly for Apple Music's virtualized list to expose the final
+track name before NVDA announces it.
 
 Press **Enter** or **Numpad Enter** on a track row to play it. This also works
 with radio shows presented as album tracks. Enter on a track's More button

@@ -1,4 +1,20 @@
-# Apple Music 0.4.4
+# Apple Music 0.4.5
+
+Fixes Home and End navigation in long Apple Music playlists.
+
+- Home and End now wait briefly for Apple Music's virtualized track row to
+  finish updating before NVDA announces it.
+- A later user focus change cancels the refresh; no focus is moved by the add-on.
+- Automated tests cover the stale-name refresh and cancellation path.
+
+Validation: 125 automated tests pass. Live NVDA MCP testing on NVDA 2027.1 in a
+229-track playlist confirmed that repeated Home and End presses announced the
+settled first and last tracks. Page Up and Page Down announcements matched
+refreshed focus reports at both ends. Fresh braille testing remains outstanding.
+
+Open AppleMusic-0.4.5.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.4
 
 Fixes Home cards that read an artist list without context and decorative icon
 characters that leaked into album names. Includes the Home reading and track

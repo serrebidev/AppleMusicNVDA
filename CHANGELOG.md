@@ -3,6 +3,15 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.5
+
+- Makes Home and End announce the settled first or last playlist track instead
+  of a stale name from Apple Music's recycled list row.
+- Cancels the delayed refresh when focus changes again or Apple Music loses the
+  foreground.
+- 125 automated tests pass. Live NVDA MCP testing on NVDA 2027.1 verified Home
+  and End in a 229-track playlist; Page Up and Page Down remained accurate.
+
 ## Changes in 0.4.4
 
 - Labels the artist-only personalized card as "Made for You, featuring [artists]"

@@ -15,6 +15,7 @@ import api
 import appModuleHandler
 import controlTypes
 import core
+import eventHandler
 import keyboardHandler
 import UIAHandler
 import ui
@@ -467,6 +468,7 @@ class AppModule(appModuleHandler.AppModule):
 	_navigationGeneration = 0
 	_trackFocusGeneration = 0
 	_trackPage = None
+	_trackBoundary = None
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
 		if not isinstance(obj, UIA):
@@ -508,6 +510,14 @@ class AppModule(appModuleHandler.AppModule):
 		self._trackPage = page
 
 	def event_gainFocus(self, obj, nextHandler):
+		pending = self._trackBoundary
+		if pending is not None:
+			if self._active() and isinstance(obj, UIA) and trackRow(obj, self.processID) is obj and pending["target"] is None:
+				pending["target"] = tuple(obj.UIAElement.GetRuntimeId())
+				self._trackFocusGeneration += 1
+				self._rememberTrackPage(obj)
+				return
+			self._trackBoundary = None
 		nextHandler()
 		self._trackFocusGeneration += 1
 		if isinstance(obj, UIA) and tuple(obj.UIAElement.GetRuntimeId()) == getattr(self, "_manualSectionTarget", None):
@@ -557,6 +567,40 @@ class AppModule(appModuleHandler.AppModule):
 			except Exception:
 				log.debugWarning("Apple Music: track-list focus unavailable", exc_info=True)
 		core.callLater(100, check)
+
+	@script(description="Move to the first or last track", gestures=["kb:home", "kb:end"])
+	def script_trackBoundary(self, gesture):
+		try:
+			focus = self._focus() if self._active() else None
+		except Exception:
+			focus = None
+		if focus is None or focus.role not in ITEM_ROLES or trackRow(focus, self.processID) is not focus:
+			gesture.send()
+			return
+		pending = {"original": tuple(focus.UIAElement.GetRuntimeId()), "target": None}
+		self._trackBoundary = pending
+		gesture.send()
+
+		def report():
+			if self._trackBoundary is not pending:
+				return
+			self._trackBoundary = None
+			if not self._active():
+				return
+			try:
+				focus = self._focus()
+				if focus is None or focus.role not in ITEM_ROLES or trackRow(focus, self.processID) is not focus:
+					return
+				identity = tuple(focus.UIAElement.GetRuntimeId())
+				if pending["target"] is not None and identity != pending["target"]:
+					return
+				if pending["target"] is None and identity == pending["original"]:
+					return
+				eventHandler.queueEvent("gainFocus", focus)
+			except Exception:
+				log.debug("Apple Music: track boundary refresh unavailable", exc_info=True)
+
+		core.callLater(200, report)
 
 	@script(description="Play the focused track, or activate the focused control", gestures=["kb:enter", "kb:numpadEnter"])
 	def script_playTrack(self, gesture):
@@ -1066,6 +1110,7 @@ class AppModule(appModuleHandler.AppModule):
 		ui.message(message)
 
 	def terminate(self):
+		self._trackBoundary = None
 		self._trackFocusGeneration += 1
 		self._navigationGeneration += 1
 		self._generation += 1

@@ -51,6 +51,9 @@ tracks, such as Find Your Harmony episodes, use the same behavior.</p>
 <p>Enter on a track's More button opens the menu normally. Other child controls keep
 their native action. Moving focus before the menu opens cancels playback, and menus
 arriving after the playback timeout are not acted on.</p>
+<p>Press <strong>Home</strong> or <strong>End</strong> on a track row to move to the
+first or last track. The add-on waits briefly for Apple Music's virtualized list
+to expose the final track name before NVDA announces it.</p>
 <p>Track recognition uses English numbered album names such as Track 1 and playlist
 rows ending with a duration, such as 3 minutes, 49 seconds. Tracks below the visible
 header are scrolled into view. Large pages with over 1,000 controls are supported.
@@ -71,13 +74,12 @@ for commands that expose it without Toggle.</p>
 <p>With Apple Music active, open NVDA Preferences, Input gestures, and find the
 command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
 <h2>Requirements and limitations</h2>
-<p>This version targets NVDA 2025.1 through 2026.1 and English Apple Music
+<p>This version targets NVDA 2025.1 through 2027.1 and English Apple Music
 menu labels. No AutoHotkey or external UI Automation library is needed.
-Version 0.4.4 passes 123 simulated-control tests. User speech logs confirmed the
-Home title and grouping improvements. The latest artist-subtitle correction was
-checked against captured live controls; fresh speech and braille testing and the
-More-button playback path still need live verification. Earlier versions received live playlist focus and
-Enter playback checks; full album transitions and open Queue/Lyrics cycling still need testing.</p>
+Version 0.4.5 passes 125 simulated-control tests. Live NVDA MCP testing on NVDA
+2027.1 confirmed settled Home and End announcements in a 229-track playlist;
+Page Up and Page Down also matched refreshed focus reports. Fresh braille testing,
+full album transitions, and open Queue/Lyrics cycling still need testing.</p>
 <p>Preference commands need a focused UIA row/card, a recognizable player More
 button, or a song newly focused or selected by Control+L. An old selection is
 never assumed to be the current song. Unsupported layouts may require manual
