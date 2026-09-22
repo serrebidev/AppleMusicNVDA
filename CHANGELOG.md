@@ -3,6 +3,17 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.9
+
+- Enter on a track no longer says Playing track.
+- Favorite and Suggest Less start immediately and poll the menu every 50 ms
+  instead of 100 to 200 ms. The menu and the return to the original control are
+  no longer spoken (braille still follows focus); only the result is announced.
+- Adds Control+Alt+Shift+Up to remove a favorite. It unchecks Favourite or
+  invokes an explicit removal command, and says Not a favorite otherwise.
+- 151 automated tests pass. Live NVDA MCP verified add, remove and Not a favorite
+  with only the result spoken.
+
 ## Changes in 0.4.8
 
 - Enter on a track row plays it by double-clicking a plain text cell of the row,

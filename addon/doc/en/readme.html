@@ -5,8 +5,12 @@
 <h1>Apple Music</h1>
 <p>In Apple Music for Windows, press <strong>Control+Alt+Down Arrow</strong>
 to suggest less of the song or album containing keyboard focus.</p>
-<p>Press <strong>Control+Alt+Up Arrow</strong> to favorite that item instead.
-Both commands use the current-song route when focus is in player controls.</p>
+<p>Press <strong>Control+Alt+Up Arrow</strong> to favorite that item instead, or
+<strong>Control+Alt+Shift+Up Arrow</strong> to remove it from favorites. Removal
+only unchecks Favourite or uses an explicit removal command, and never adds a
+favorite. All three commands use the current-song route when focus is in player
+controls. NVDA does not read the menu or your item again when focus returns; you
+hear only the result.</p>
 <h2>Using the player</h2>
 <p>A focused Action/More button is used directly. Apple Music exposes its player
 More button to NVDA as “Action.” From other player controls, the add-on looks for
@@ -94,7 +98,7 @@ command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
 <h2>Requirements and limitations</h2>
 <p>This version targets NVDA 2025.1 through 2027.1 and English Apple Music
 menu labels. No AutoHotkey or external UI Automation library is needed.
-Version 0.4.8 passes 146 simulated-control tests. Live NVDA MCP testing on NVDA
+Version 0.4.9 passes 151 simulated-control tests. Live NVDA MCP testing on NVDA
 2027.1 confirmed settled Home and End announcements in a 229-track playlist;
 Page Up and Page Down also matched refreshed focus reports. Fresh braille testing,
 full album transitions, and open Queue/Lyrics cycling still need testing.</p>

@@ -69,7 +69,7 @@ class Node:
 
 
 def installStubs():
-    for name in ("api", "appModuleHandler", "controlTypes", "core", "eventHandler", "keyboardHandler", "mouseHandler", "winUser",
+    for name in ("api", "appModuleHandler", "controlTypes", "core", "eventHandler", "keyboardHandler", "mouseHandler", "winUser", "braille",
                  "UIAHandler", "ui", "logHandler", "NVDAObjects", "NVDAObjects.UIA", "scriptHandler"):
         sys.modules[name] = types.ModuleType(name)
     sys.modules["appModuleHandler"].AppModule = type("AppModule", (), {"terminate": lambda self: None})
@@ -138,6 +138,7 @@ class SuggestLessTests(unittest.TestCase):
         music.UIAHandler.IUIAutomationScrollItemPattern = object()
         music.core.callLater = lambda delay, callback: self.pending.append(callback)
         music.eventHandler.queueEvent = Mock()
+        music.braille.handler = Mock()
         music.ui.message = self.messages.append
 
         def send(key):
@@ -389,6 +390,75 @@ class SuggestLessTests(unittest.TestCase):
         self.tick()
         favorite.UIAInvokePattern.Invoke.assert_not_called()
         self.assertEqual(self.messages[-1], "Already a favorite.")
+
+    def favouriteToggle(self, state):
+        favourite = Node("MENUITEM", "Favourite")
+        favourite.UIATogglePattern = Mock(CurrentToggleState=state)
+        return favourite
+
+    def test_unfavorite_unchecks_favourite(self):
+        self.app.script_unfavorite(None)
+        self.tick()
+        favourite = self.favouriteToggle(music.UIAHandler.ToggleState_On)
+        self.openMenu(Node("MENUITEM", "Add to Library"), favourite)
+        self.drain()
+        favourite.UIATogglePattern.Toggle.assert_called_once_with()
+        self.assertEqual(self.messages[-1], "Removed from favorites.")
+
+    def test_unfavorite_never_favorites(self):
+        self.app.script_unfavorite(None)
+        self.tick()
+        favourite = self.favouriteToggle(music.UIAHandler.ToggleState_Off)
+        self.openMenu(favourite)
+        self.drain()
+        favourite.UIATogglePattern.Toggle.assert_not_called()
+        favourite.UIAInvokePattern.Invoke.assert_not_called()
+        self.assertEqual(self.messages[-1], "Not a favorite.")
+
+    def test_escape_return_after_unchanged_favorite_is_quiet(self):
+        row = self.focus
+        rowList = Node("LIST", children=[row])
+        self.app.script_unfavorite(None)
+        self.tick()
+        spoken = Mock()
+        self.onKey = lambda key: (self.app.event_focusEntered(rowList, spoken), self.app.event_gainFocus(row, spoken)) if key == "escape" else None
+        self.openMenu(self.favouriteToggle(music.UIAHandler.ToggleState_Off))
+        self.drain()
+        self.assertIn("escape", self.keys)
+        spoken.assert_not_called()
+        self.assertEqual(self.messages[-1], "Not a favorite.")
+
+    def test_unfavorite_invokes_explicit_removal(self):
+        self.app.script_unfavorite(None)
+        self.tick()
+        removal = Node("MENUITEM", "Remove from Favourites")
+        self.openMenu(removal)
+        self.drain()
+        removal.UIAInvokePattern.Invoke.assert_called_once_with()
+        self.assertEqual(self.messages[-1], "Removed from favorites.")
+
+    def test_menu_and_return_focus_are_not_spoken(self):
+        row = self.focus
+        self.app.script_favorite(None)
+        self.tick()
+        favourite = self.favouriteToggle(music.UIAHandler.ToggleState_Off)
+        menu = self.openMenu(favourite)
+        spoken = Mock()
+        self.app.event_gainFocus(favourite, spoken)
+        spoken.assert_not_called()
+        # Apple Music refocuses the row's list, then the row, as the menu command runs.
+        rowList = Node("LIST", children=[row])
+        Node("GROUPING", "Content", children=[rowList])
+        favourite.UIATogglePattern.Toggle.side_effect = lambda: (
+            setattr(self, "focus", row),
+            self.app.event_focusEntered(rowList, spoken), self.app.event_gainFocus(row, spoken))
+        self.drain()
+        favourite.UIATogglePattern.Toggle.assert_called_once_with()
+        spoken.assert_not_called()
+        music.braille.handler.handleGainFocus.assert_called_with(row)
+        self.app.event_gainFocus(row, spoken)
+        spoken.assert_called_once_with()
+        self.assertEqual(self.messages[-1], "Added to favorites.")
 
     def test_favorite_player_route_restores_focus(self):
         player = self.focus = Node("BUTTON", "Pause")
@@ -886,7 +956,7 @@ class SuggestLessTests(unittest.TestCase):
         self.assertEqual(music.winUser.setCursorPos.call_args_list[0].args, (110, 210))
         self.assertEqual(music.winUser.setCursorPos.call_args_list[-1].args, (5, 6))
         self.assertEqual(self.keys, [])
-        self.assertEqual(self.messages[-1], "Playing track.")
+        self.assertEqual(self.messages, [])
         gesture.send.assert_not_called()
 
     def test_covered_track_falls_back_to_play_menu(self):
@@ -1257,7 +1327,7 @@ class SuggestLessTests(unittest.TestCase):
                 playNext.UIAInvokePattern.Invoke.assert_not_called()
                 playLast.UIAInvokePattern.Invoke.assert_not_called()
                 self.assertNotIn("shift+f10", self.keys)
-                self.assertEqual(self.messages[-1], "Playing track.")
+                self.assertEqual(self.messages, [])
 
     def test_enter_on_track_child_controls_keeps_native_action(self):
         for role, name in (("BUTTON", "More"), ("SPLITBUTTON", "More options"), ("BUTTON", "Favorite")):

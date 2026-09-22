@@ -33,7 +33,9 @@
   text cell of that row, at a point taken from UIA that must hit-test back to
   the same cell, then restores the pointer. Otherwise it uses the More menu.
 - Favorite and Suggest Less must preserve an already-set preference. Never
-  invoke removal or undo commands, and reject multiple selected items.
+  invoke removal or undo commands from them, and reject multiple selected items.
+  Only the explicit Remove favorite command (Control+Alt+Shift+Up) may uncheck
+  Favourite or invoke a removal command, and it must never add a favorite.
 - Enter on a track row plays that track; child controls retain their native
   action. Do not substitute Play Next or Play Last for Play.
 - Section navigation moves focus without activating controls. Respect user

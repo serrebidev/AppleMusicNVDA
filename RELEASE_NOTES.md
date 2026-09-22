@@ -1,4 +1,25 @@
-# Apple Music 0.4.8
+# Apple Music 0.4.9
+
+Faster, quieter favorites, and a way to remove them.
+
+- Control+Alt+Up (favorite) and Control+Alt+Down (Suggest Less) start at once
+  and check the menu more often. NVDA no longer reads the menu or your item again
+  when focus returns; you hear only the result.
+- New: Control+Alt+Shift+Up removes the focused song or album, or the current
+  song, from favorites. It never adds a favorite; if the item is not one, NVDA
+  says Not a favorite.
+- Enter on a track no longer says Playing track.
+
+Validation: 151 automated tests pass. Live NVDA MCP testing on NVDA 2027.1 on a
+playlist track: Control+Alt+Up said only Added to favorites, and the menu then
+showed Favourited checked. Control+Alt+Shift+Up said only Removed from favorites,
+and the menu showed Favourite unchecked. On a non-favorite it said only Not a
+favorite. The fixed waits of 100 and 200 ms are gone and the menu is checked
+every 50 ms; exact timings were not captured. Braille was not tested.
+
+Open AppleMusic-0.4.9.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.8
 
 Makes Enter on a track much faster.
 
@@ -14,8 +35,6 @@ Validation: 146 automated tests pass. Live NVDA MCP testing on NVDA 2027.1 in a
 track. about 0.2 seconds after Enter (the More menu took about 0.8 seconds), and
 focus stayed on the row. Album track lists were not tested live; they fall back
 to the More menu if the click check fails. Braille was not tested.
-
-Open AppleMusic-0.4.8.nvda-addon to install, then restart NVDA.
 
 ## Earlier 0.4.7
 

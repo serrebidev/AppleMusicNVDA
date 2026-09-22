@@ -16,6 +16,7 @@ from collections import deque
 from ctypes.wintypes import POINT
 
 import api
+import braille
 import appModuleHandler
 import controlTypes
 import core
@@ -37,7 +38,7 @@ MENU_ROLES = {Role.POPUPMENU, Role.MENUITEM}
 ACTIONS = {
 	"play": {
 		"label": "Play", "names": {"play"}, "undo": set(),
-		"already": "", "success": "Playing track.",
+		"already": "", "success": "",
 	},
 	"suggestLess": {
 		"label": "Suggest Less",
@@ -52,6 +53,11 @@ ACTIONS = {
 		"undo": {"undo favorite", "undo favourite", "remove from favorites", "remove from favourites", "unfavorite", "unfavourite", "favorited", "favourited"},
 		"already": "Already a favorite.",
 		"success": "Added to favorites.",
+	},
+	# Handled by _removeFavorite from the favorite command names.
+	"unfavorite": {
+		"label": "Remove favorite", "names": set(), "undo": set(),
+		"already": "Not a favorite.", "success": "Removed from favorites.",
 	},
 }
 COMMAND_NAMES = set().union(*(action["names"] | action["undo"] for action in ACTIONS.values()))
@@ -656,7 +662,58 @@ class AppModule(appModuleHandler.AppModule):
 			self._trackPageName = None
 		self._trackPage = page
 
+	def _quietFocus(self, obj):
+		"""Menu traffic and the return to the original control say nothing new."""
+		if not isinstance(obj, UIA):
+			return False
+		operation = self._operation
+		if operation is not None and operation.get("openedMenu"):
+			if focusedMenu(obj, self.processID) or (obj.role == Role.WINDOW and normalizedName(obj.name) in {"pop-up", "popup"}):
+				return True
+		quiet = getattr(self, "_quietReturn", None)
+		if quiet is not None:
+			identity, containers, deadline = quiet
+			if time.monotonic() >= deadline:
+				self._quietReturn = None
+				return False
+			focused = tuple(obj.UIAElement.GetRuntimeId())
+			if focused == identity:
+				self._quietReturn = None
+				return True
+			# Apple Music refocuses the row's list and grouping on the way back.
+			return focused in containers
+		return False
+
+	def _quietenReturn(self, original=None):
+		"""Apple Music refocuses the original control as soon as a menu command runs."""
+		if original is None and self._operation:
+			original = self._operation.get("original")
+		if original is None:
+			return
+		containers = set()
+		for parent in ancestors(original.parent):
+			if not isinstance(parent, UIA) or parent.processID != self.processID:
+				break
+			containers.add(tuple(parent.UIAElement.GetRuntimeId()))
+		self._quietReturn = (tuple(original.UIAElement.GetRuntimeId()), containers, time.monotonic() + 1.5)
+
+	def event_focusEntered(self, obj, nextHandler):
+		# NVDA announces the row's list and grouping as focus re-enters them.
+		quiet = getattr(self, "_quietReturn", None)
+		if quiet is not None and isinstance(obj, UIA) and time.monotonic() < quiet[2]:
+			if tuple(obj.UIAElement.GetRuntimeId()) in quiet[1]:
+				return
+		operation = self._operation
+		if operation is not None and operation.get("openedMenu") and isinstance(obj, UIA):
+			if obj.role in MENU_ROLES or (obj.role == Role.WINDOW and normalizedName(obj.name) in {"pop-up", "popup"}):
+				return
+		nextHandler()
+
 	def event_gainFocus(self, obj, nextHandler):
+		if self._quietFocus(obj):
+			# Keep braille on the real focus without repeating it in speech.
+			braille.handler.handleGainFocus(obj)
+			return
 		pending = self._trackBoundary
 		if pending is not None:
 			if self._active() and isinstance(obj, UIA) and trackRow(obj, self.processID) is obj and pending["target"] is None:
@@ -825,6 +882,13 @@ class AppModule(appModuleHandler.AppModule):
 	)
 	def script_favorite(self, gesture):
 		self._begin("favorite")
+
+	@script(
+		description="Remove the focused song or album, or the current song from the player, from favorites",
+		gesture="kb:control+alt+shift+upArrow",
+	)
+	def script_unfavorite(self, gesture):
+		self._begin("unfavorite")
 
 	@script(description="Move to the next Apple Music section", gesture="kb:f6")
 	def script_nextSection(self, gesture):
@@ -1235,7 +1299,7 @@ class AppModule(appModuleHandler.AppModule):
 		if expectedFocus is not None:
 			self._operation["expectedFocus"] = tuple(expectedFocus.UIAElement.GetRuntimeId())
 		# Defer to avoid injecting input inside the triggering script.
-		self._later(self._start, 1 if action == "play" else 100)
+		self._later(self._start, 1)
 
 	def _start(self):
 		focus = self._focus()
@@ -1290,7 +1354,7 @@ class AppModule(appModuleHandler.AppModule):
 			more.UIAInvokePattern.Invoke()
 			self._operation["openedMenu"] = True
 			self._operation["deadline"] = time.monotonic() + 2.0
-			self._later(self._waitForMenu, 150)
+			self._later(self._waitForMenu, 50)
 			return
 		self._revealSong()
 
@@ -1351,7 +1415,7 @@ class AppModule(appModuleHandler.AppModule):
 		# Focus stays within this item; Shift+F10 is Apple's documented shortcut.
 		self._operation["target"] = tuple(item.UIAElement.GetRuntimeId())
 		if trackRow(item, self.processID) and revealTrack(item):
-			self._later(self._sendTrackMenu, 150)
+			self._later(self._sendTrackMenu, 50)
 			return
 		self._sendTrackMenu()
 
@@ -1402,7 +1466,7 @@ class AppModule(appModuleHandler.AppModule):
 			keyboardHandler.KeyboardInputGesture.fromName("shift+f10").send()
 		self._operation["openedMenu"] = True
 		self._operation["deadline"] = time.monotonic() + 2.0
-		self._later(self._waitForMenu, 150)
+		self._later(self._waitForMenu, 50)
 
 	def _waitForMenu(self):
 		action = self._action()
@@ -1427,6 +1491,9 @@ class AppModule(appModuleHandler.AppModule):
 				return
 		if menu is not None:
 			commands = menuCommands(menu, self.processID)
+			if self._operation["action"] == "unfavorite":
+				self._removeFavorite(commands)
+				return
 			# Undo wins even if a provider momentarily exposes both states.
 			if any(commands.get(name) for name in action["undo"]):
 				self._finish(action["already"])
@@ -1461,16 +1528,56 @@ class AppModule(appModuleHandler.AppModule):
 					if state != UIAHandler.ToggleState_Off:
 						self._finish(f"{label} has an uncertain checked state; no change made.")
 						return
+					self._quietenReturn()
 					toggle.Toggle()
 				else:
+					self._quietenReturn()
 					pattern.Invoke()
 				# Give the popup time to close before restoring player focus.
-				self._later(lambda: self._finish(action["success"]), 200)
+				self._later(lambda: self._finish(action["success"]), 50)
 				return
 		if time.monotonic() < self._operation["deadline"]:
-			self._later(self._waitForMenu)
+			self._later(self._waitForMenu, 50)
 		else:
 			self._finish(f"{label} not available.")
+
+	def _removeFavorite(self, commands):
+		"""Uncheck Favourite, or use an explicit removal command. Never favorite."""
+		favorite = ACTIONS["favorite"]
+		statusNames = {"favorited", "favourited"}
+		removals = [command for name in favorite["undo"] - statusNames for command in commands.get(name, [])]
+		checks = [command for name in favorite["names"] | statusNames for command in commands.get(name, [])]
+		found = removals + checks
+		if len(found) != 1:
+			self._finish("Remove favorite is ambiguous in this menu." if found else "Remove favorite not available.")
+			return
+		command = found[0]
+		if State.UNAVAILABLE in command.states:
+			self._finish("Remove favorite is unavailable for this item.")
+			return
+		toggle = command.UIATogglePattern if isinstance(command, UIA) else None
+		pattern = command.UIAInvokePattern if isinstance(command, UIA) else None
+		if command in checks and toggle:
+			state = toggle.CurrentToggleState
+			if state == UIAHandler.ToggleState_Off:
+				self._finish("Not a favorite.")
+				return
+			if state != UIAHandler.ToggleState_On:
+				self._finish("Favorite has an uncertain checked state; no change made.")
+				return
+			self._quietenReturn()
+			toggle.Toggle()
+		elif command in checks and State.CHECKED not in command.states:
+			# An unchecked Favourite or Add to Favourites command means it is not one.
+			self._finish("Not a favorite.")
+			return
+		elif pattern:
+			self._quietenReturn()
+			pattern.Invoke()
+		else:
+			self._finish("Apple Music does not expose a supported action for Remove favorite.")
+			return
+		self._later(lambda: self._finish(ACTIONS["unfavorite"]["success"]), 50)
 
 	def _finish(self, message, restore=True):
 		operation = self._operation
@@ -1483,17 +1590,22 @@ class AppModule(appModuleHandler.AppModule):
 				if operation["openedMenu"]:
 					focus = self._focus()
 					if focus and focusedMenu(focus, self.processID):
+						if operation["original"]:
+							self._quietenReturn(operation["original"])
 						keyboardHandler.KeyboardInputGesture.fromName("escape").send()
 			except Exception:
 				log.debugWarning("Apple Music preferences: could not close menu", exc_info=True)
 				message += " The menu could not be closed."
 			try:
 				if operation["restore"] and operation["original"]:
+					# Focus returns to where the user already was; do not re-read it.
+					self._quietenReturn(operation["original"])
 					operation["original"].setFocus()
 			except Exception:
 				log.debugWarning("Apple Music preferences: could not restore focus", exc_info=True)
 				message += " Original focus could not be restored."
-		ui.message(message)
+		if message:
+			ui.message(message)
 
 	def terminate(self):
 		self._trackBoundary = None

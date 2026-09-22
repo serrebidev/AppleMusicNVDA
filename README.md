@@ -64,6 +64,7 @@ These are the add-on's default shortcuts.
 | Home or End | Move to the first or last track. |
 | Enter or Numpad Enter | Play the focused track row. Other controls keep their normal Enter action. |
 | Control+Alt+Up Arrow | Favorite the focused song or album, or the current song from player controls. |
+| Control+Alt+Shift+Up Arrow | Remove the focused song or album, or the current song, from favorites. |
 | Control+Alt+Down Arrow | Suggest less of the focused song or album, or the current song from player controls. |
 
 To change a shortcut, open NVDA's **Preferences > Input gestures** while Apple
@@ -108,20 +109,24 @@ track name before NVDA announces it.
 
 Press **Enter** or **Numpad Enter** on a track row to play it. The add-on
 double-clicks the row's title, as a mouse user would, which is much faster than
-the More menu, and puts the mouse pointer back. If the title is hidden or covered,
+the More menu, and puts the mouse pointer back. NVDA says nothing; the music
+starting is the confirmation. If the title is hidden or covered,
 it uses the track's More menu instead. This also works with radio shows presented
 as album tracks. Enter on a track's More button
 opens its menu normally, and other child controls keep their usual action.
 
 ### Favorite and Suggest Less
 
-Focus one song or album and press **Control+Alt+Up Arrow** to favorite it, or
-**Control+Alt+Down Arrow** to suggest less of it. From player controls, the
+Focus one song or album and press **Control+Alt+Up Arrow** to favorite it,
+**Control+Alt+Shift+Up Arrow** to remove it from favorites, or
+**Control+Alt+Down Arrow** to suggest less of it. NVDA does not read the menu the
+add-on opens, or your item again when focus returns; you hear only the result. From player controls, the
 add-on tries to apply the command to the current song and restore your original
 focus afterward. Keep focus in place until NVDA announces the result.
 
 Repeating a shortcut keeps the preference set. NVDA tells you when the item is
-already a favorite, already set to Suggest Less, or the command is unavailable.
+already a favorite, not a favorite, already set to Suggest Less, or the command
+is unavailable.
 Select only one song or album at a time.
 
 ### Reading Home cards
