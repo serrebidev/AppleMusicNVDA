@@ -1,4 +1,22 @@
-# Apple Music 0.4.5
+# Apple Music 0.4.6
+
+Makes section navigation faster and adds direct sidebar and account shortcuts.
+
+- F6 skips Queue and Lyrics immediately when their exact toggle controls report
+  that the panels are closed, avoiding a full scan of long playlists.
+- Remembered section controls are refreshed before track discovery.
+- Control+1 focuses Home without activating it.
+- Control+2 through Control+5 open New, Radio, Library, and Playlists.
+- Control+6 opens Settings through the account menu.
+
+Validation: 132 automated tests pass. Live NVDA MCP testing on NVDA 2027.1:
+F6 from a 14,363-track list to Search took 0.123 seconds (was 2.32 seconds).
+Control+2 and Control+3 opened New and Radio, Control+4 and Control+5 expanded
+Library and Playlists, and Control+6 opened Settings. Braille was not tested.
+
+Open AppleMusic-0.4.6.nvda-addon to install, then restart NVDA.
+
+## Earlier 0.4.5
 
 Fixes Home and End navigation in long Apple Music playlists.
 

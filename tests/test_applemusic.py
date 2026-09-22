@@ -102,7 +102,7 @@ class SuggestLessTests(unittest.TestCase):
         ))
         self.root.FindFirstBuildCache = lambda scope, condition, cache: next((
             obj.BuildUpdatedCache(cache) for obj in self.selected
-            if obj.cachedAutomationId == condition[1]
+            if obj.cachedAutomationId == condition[1] or obj.name == condition[1]
         ), None)
         self.pending, self.keys, self.messages = [], [], []
         self.onKey = lambda key: None
@@ -122,6 +122,8 @@ class SuggestLessTests(unittest.TestCase):
         music.UIAHandler.TreeScope_Descendants = 4
         music.UIAHandler.UIA_IsKeyboardFocusablePropertyId = 30009
         music.UIAHandler.UIA_AutomationIdPropertyId = 30011
+        music.UIAHandler.UIA_ClassNamePropertyId = 30012
+        music.UIAHandler.UIA_NamePropertyId = 30005
         music.UIAHandler.UIA_ControlTypePropertyId = 30003
         music.UIAHandler.UIA_ListItemControlTypeId = 50007
         music.UIAHandler.UIA_DataItemControlTypeId = 50029
@@ -962,6 +964,104 @@ class SuggestLessTests(unittest.TestCase):
         self.drain()
         self.assertIs(self.focus, self.search)
         self.root.FindAllBuildCache.assert_not_called()
+
+    def test_f6_skips_closed_queue_and_lyrics_without_global_scan(self):
+        self.trackFixture()
+        self.focus = self.track
+        search = Node("BUTTON", "Click to search")
+        search.cachedAutomationId = "Search_Button"
+        search.setFocus.side_effect = lambda: setattr(self, "focus", search)
+        queue = Node("TOGGLEBUTTON", "Queue")
+        queue.cachedAutomationId = "PlayQueueToggleButton"
+        queue.UIATogglePattern = Mock(CurrentToggleState=music.UIAHandler.ToggleState_Off)
+        lyrics = Node("TOGGLEBUTTON", "Lyrics")
+        lyrics.cachedAutomationId = "LyricsToggleButton"
+        lyrics.UIATogglePattern = Mock(CurrentToggleState=music.UIAHandler.ToggleState_Off)
+        self.selected = [search, queue, lyrics, self.track]
+        self.root.FindAllBuildCache = Mock(side_effect=AssertionError("Global scan"))
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, search)
+        self.root.FindAllBuildCache.assert_not_called()
+
+    def test_f6_keeps_open_queue_before_search(self):
+        self.trackFixture()
+        self.focus = self.track
+        queueButton = Node("TOGGLEBUTTON", "Queue")
+        queueButton.cachedAutomationId = "PlayQueueToggleButton"
+        queueButton.UIATogglePattern = Mock(CurrentToggleState=music.UIAHandler.ToggleState_On)
+        lyricsButton = Node("TOGGLEBUTTON", "Lyrics")
+        lyricsButton.cachedAutomationId = "LyricsToggleButton"
+        lyricsButton.UIATogglePattern = Mock(CurrentToggleState=music.UIAHandler.ToggleState_Off)
+        queueItem = Node("LISTITEM", "Queued song")
+        queueItem.parent = Node("PANE", "Queue")
+        queueItem.setFocus.side_effect = lambda: setattr(self, "focus", queueItem)
+        self.selected = [queueButton, lyricsButton, self.track, queueItem]
+        self.app.script_nextSection(None)
+        self.drain()
+        self.assertIs(self.focus, queueItem)
+
+    def test_control_1_focuses_home_without_activating_it(self):
+        home = Node("LISTITEM", "Home")
+        home.cachedAutomationId = "Sidebar_Home"
+        home.setFocus.side_effect = lambda: setattr(self, "focus", home)
+        self.selected = [home]
+        self.app.script_focusHome(None)
+        self.assertIs(self.focus, home)
+        home.UIAInvokePattern.Invoke.assert_not_called()
+
+    def test_control_1_reports_missing_home(self):
+        self.selected = []
+        self.app.script_focusHome(None)
+        self.assertIn("Home option is unavailable", self.messages[-1])
+
+    def test_control_2_through_5_open_sidebar_options(self):
+        shortcuts = (
+            (self.app.script_focusNew, "Sidebar_New", "New"),
+            (self.app.script_focusRadio, "Sidebar_Radio", "Radio"),
+            (self.app.script_focusLibrary, "Sidebar_Header_Library", "Library"),
+            (self.app.script_focusPlaylists, "Sidebar_Header_Playlists", "Playlists"),
+        )
+        for command, identifier, name in shortcuts:
+            with self.subTest(name=name):
+                self.keys.clear()
+                control = Node("LISTITEM", name)
+                control.cachedAutomationId = identifier
+                control.setFocus.side_effect = lambda control=control: setattr(self, "focus", control)
+                self.selected = [control]
+                command(None)
+                self.assertIs(self.focus, control)
+                self.drain()
+                self.assertEqual(self.keys, ["enter"])
+
+    def test_control_2_skips_enter_after_user_moves_focus(self):
+        control = Node("LISTITEM", "New")
+        control.cachedAutomationId = "Sidebar_New"
+        control.setFocus.side_effect = lambda: setattr(self, "focus", control)
+        self.selected = [control]
+        self.app.script_focusNew(None)
+        self.focus = Node("LISTITEM", "Radio")
+        self.drain()
+        self.assertEqual(self.keys, [])
+
+    def test_control_6_opens_account_and_focuses_settings(self):
+        account = Node("LISTITEM", "Person")
+        account.cachedClassName = "Microsoft.UI.Xaml.Controls.NavigationViewItem"
+        account.setFocus.side_effect = lambda: setattr(self, "focus", account)
+        settings = Node("BUTTON", "Settings")
+        settings.setFocus.side_effect = lambda: setattr(self, "focus", settings)
+        self.selected = [account]
+
+        def openAccount(key):
+            if key == "enter" and self.focus is account:
+                self.focus = Node("BUTTON", "View Profile")
+                self.selected = [account, settings]
+
+        self.onKey = openAccount
+        self.app.script_focusAccountSettings(None)
+        self.drain()
+        self.assertEqual(self.keys, ["enter", "enter"])
+        self.assertIs(self.focus, settings)
 
     def test_existing_page_does_not_pull_focus_back(self):
         self.trackFixture()

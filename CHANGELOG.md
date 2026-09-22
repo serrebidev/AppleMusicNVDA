@@ -3,6 +3,16 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.6
+
+- Skips known-closed Queue and Lyrics panels through their exact toggle controls,
+  avoiding a full playlist-tree scan when F6 moves from Main content to Search.
+- Refreshes remembered section controls before searching for track rows.
+- Adds Control+1 to focus Home. Control+2 through Control+5 open New, Radio,
+  Library, and Playlists. Control+6 opens Settings through the account menu.
+- 132 automated tests pass. Live NVDA MCP: F6 to Search from a 14,363-track list
+  took 0.123 seconds, down from 2.32; Control+2 through Control+6 verified.
+
 ## Changes in 0.4.5
 
 - Makes Home and End announce the settled first or last playlist track instead

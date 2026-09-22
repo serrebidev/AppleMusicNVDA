@@ -687,6 +687,129 @@ class AppModule(appModuleHandler.AppModule):
 	def script_previousSection(self, gesture):
 		self._switchSection(-1)
 
+	def _enterWhenFocused(self, targetID, generation, then=None):
+		"""Press Enter once focus settles on the target; drop it if the user moved on."""
+		def press():
+			if generation != self._navigationGeneration or not self._active():
+				return
+			try:
+				focus = self._focus()
+				if focus is None or tuple(focus.UIAElement.GetRuntimeId()) != targetID:
+					return
+				keyboardHandler.KeyboardInputGesture.fromName("enter").send()
+				if then is not None:
+					core.callLater(100, then)
+			except Exception:
+				log.exception("Apple Music: Enter on shortcut target failed")
+
+		core.callLater(50, press)
+
+	def _focusSidebarControl(self, identifier, label, activate=False):
+		self._trackFocusGeneration += 1
+		self._navigationGeneration += 1
+		generation = self._navigationGeneration
+		if not self._active():
+			return
+		if self._operation is not None:
+			ui.message("Wait for the current Apple Music command to finish.")
+			return
+		try:
+			client = UIAHandler.handler.clientObject
+			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+			control = self._controlByID(root, identifier)
+			if control is None or not isSidebarItem(control):
+				ui.message(f"Apple Music's {label} option is unavailable.")
+				return
+			targetID = tuple(control.UIAElement.GetRuntimeId())
+			self._manualSectionTarget = targetID
+			control.setFocus()
+		except Exception:
+			log.exception("Apple Music: %s focus failed", label)
+			ui.message(f"Apple Music's {label} option could not be focused.")
+			return
+		if activate:
+			self._enterWhenFocused(targetID, generation)
+
+	@script(description="Focus Home in the Apple Music sidebar", gesture="kb:control+1")
+	def script_focusHome(self, gesture):
+		self._focusSidebarControl("Sidebar_Home", "Home")
+
+	@script(description="Open New in the Apple Music sidebar", gesture="kb:control+2")
+	def script_focusNew(self, gesture):
+		self._focusSidebarControl("Sidebar_New", "New", activate=True)
+
+	@script(description="Open Radio in the Apple Music sidebar", gesture="kb:control+3")
+	def script_focusRadio(self, gesture):
+		self._focusSidebarControl("Sidebar_Radio", "Radio", activate=True)
+
+	@script(description="Open Library in the Apple Music sidebar", gesture="kb:control+4")
+	def script_focusLibrary(self, gesture):
+		self._focusSidebarControl("Sidebar_Header_Library", "Library", activate=True)
+
+	@script(description="Open Playlists in the Apple Music sidebar", gesture="kb:control+5")
+	def script_focusPlaylists(self, gesture):
+		self._focusSidebarControl("Sidebar_Header_Playlists", "Playlists", activate=True)
+
+	@script(description="Open Apple Music Settings from the account menu", gesture="kb:control+6")
+	def script_focusAccountSettings(self, gesture):
+		self._trackFocusGeneration += 1
+		self._navigationGeneration += 1
+		generation = self._navigationGeneration
+		if not self._active():
+			return
+		if self._operation is not None:
+			ui.message("Wait for the current Apple Music command to finish.")
+			return
+		try:
+			client = UIAHandler.handler.clientObject
+			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+			condition = client.CreatePropertyCondition(
+				UIAHandler.UIA_ClassNamePropertyId,
+				"Microsoft.UI.Xaml.Controls.NavigationViewItem",
+			)
+			elements = root.FindAllBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+			account = next((
+				obj for obj in (UIA(UIAElement=elements.GetElement(index)) for index in range(elements.Length))
+				if obj.processID == self.processID
+				and isSidebarItem(obj)
+				and not obj.UIAElement.cachedAutomationId
+				and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}
+			), None)
+			if account is None:
+				ui.message("Apple Music's account option is unavailable.")
+				return
+			accountID = tuple(account.UIAElement.GetRuntimeId())
+			self._manualSectionTarget = accountID
+			account.setFocus()
+		except Exception:
+			log.exception("Apple Music: account focus failed")
+			ui.message("Apple Music's account option could not be focused.")
+			return
+
+		def focusSettings(attempt=0):
+			if generation != self._navigationGeneration or not self._active():
+				return
+			try:
+				root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
+				condition = client.CreatePropertyCondition(UIAHandler.UIA_NamePropertyId, "Settings")
+				element = root.FindFirstBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+				if element:
+					settings = UIA(UIAElement=element)
+					if settings.processID == self.processID and normalizedName(settings.name) == "settings":
+						settingsID = tuple(settings.UIAElement.GetRuntimeId())
+						self._manualSectionTarget = settingsID
+						settings.setFocus()
+						self._enterWhenFocused(settingsID, generation)
+						return
+			except Exception:
+				log.debug("Apple Music: Settings lookup failed", exc_info=True)
+			if attempt < 4:
+				core.callLater(100, lambda: focusSettings(attempt + 1))
+			else:
+				ui.message("Apple Music's Settings option is unavailable.")
+
+		self._enterWhenFocused(accountID, generation, then=focusSettings)
+
 	def _switchSection(self, direction):
 		self._trackFocusGeneration += 1
 		if not self._active():
@@ -734,32 +857,56 @@ class AppModule(appModuleHandler.AppModule):
 
 		core.callLater(1, advance)
 
+	def _controlByID(self, root, identifier):
+		client = UIAHandler.handler.clientObject
+		condition = client.CreatePropertyCondition(UIAHandler.UIA_AutomationIdPropertyId, identifier)
+		element = root.FindFirstBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
+		if not element:
+			return None
+		obj = UIA(UIAElement=element)
+		if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}:
+			return obj
+		return None
+
+	def _openOptionalSections(self, root):
+		"""Return known open panels, or None when their toggle state is unavailable."""
+		try:
+			openSections = set()
+			for section, identifier in (("Queue", "PlayQueueToggleButton"), ("Lyrics", "LyricsToggleButton")):
+				button = self._controlByID(root, identifier)
+				toggle = button.UIATogglePattern if button is not None else None
+				if toggle is None:
+					return None
+				state = toggle.CurrentToggleState
+				if state not in {UIAHandler.ToggleState_Off, UIAHandler.ToggleState_On}:
+					return None
+				if state == UIAHandler.ToggleState_On:
+					openSections.add(section)
+			return openSections
+		except Exception:
+			log.debug("Apple Music: optional panel state unavailable", exc_info=True)
+			return None
+
 	def _quickSection(self, section, root):
 		"""Try a live remembered control or an exact ID before global discovery."""
-		rows = self._trackRows(root) if section == "Main content" else None
 		try:
 			old = getattr(self, "_sectionObjects", {}).get(section)
 			if old is not None:
 				obj = UIA(UIAElement=old.UIAElement.BuildUpdatedCache(UIAHandler.handler.baseCacheRequest))
 				if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} and sectionFor(obj, self.processID) == section:
-					if section != "Main content" or (rows and trackRow(obj, self.processID) and tuple(obj.parent.UIAElement.GetRuntimeId()) == tuple(rows[0].parent.UIAElement.GetRuntimeId())):
+					if section != "Main content" or trackRow(obj, self.processID) is obj:
 						return obj
 		except Exception:
 			# Navigation destroys content controls; a stale reference is normal.
 			pass
+		rows = self._trackRows(root) if section == "Main content" else None
 		if rows:
 			return rows[0]
 		identifier = {"Search": "Search_Button", "Sidebar": "NavigationViewBackButton", "Player": "TransportControl_PlayPauseStop"}.get(section)
 		if identifier is None:
 			return None
-		client = UIAHandler.handler.clientObject
-		condition = client.CreatePropertyCondition(UIAHandler.UIA_AutomationIdPropertyId, identifier)
-		element = root.FindFirstBuildCache(UIAHandler.TreeScope_Descendants, condition, UIAHandler.handler.baseCacheRequest)
-		if element:
-			obj = UIA(UIAElement=element)
-			if obj.processID == self.processID and not obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE} and sectionFor(obj, self.processID) == section:
-				return obj
-		return None
+		obj = self._controlByID(root, identifier)
+		return obj if obj is not None and sectionFor(obj, self.processID) == section else None
 
 	def _navigationSteps(self, direction, originalID):
 		try:
@@ -784,7 +931,14 @@ class AppModule(appModuleHandler.AppModule):
 			client = UIAHandler.handler.clientObject
 			root = client.ElementFromHandleBuildCache(api.getForegroundObject().windowHandle, UIAHandler.handler.baseCacheRequest)
 			sections = {}
-			preferred = SECTION_ORDER[(SECTION_ORDER.index(current) + self._navigationDirection) % len(SECTION_ORDER)]
+			openOptional = self._openOptionalSections(root)
+
+			def preferredSection():
+				for offset in range(1, len(SECTION_ORDER)):
+					name = SECTION_ORDER[(SECTION_ORDER.index(current) + self._navigationDirection * offset) % len(SECTION_ORDER)]
+					if openOptional is None or name not in {"Queue", "Lyrics"} or name in openOptional:
+						return name
+			preferred = preferredSection()
 			quick = self._quickSection(preferred, root)
 			if quick is not None:
 				sections[preferred] = [quick]
@@ -810,15 +964,14 @@ class AppModule(appModuleHandler.AppModule):
 					section = sectionFor(obj, self.processID, lineage)
 					log.debug("Apple Music section candidate: %s; role=%s; id=%s; section=%s", obj.name, obj.role, obj.UIAElement.cachedAutomationId, section)
 					sections.setdefault(section, []).append(obj)
-					direction = self._navigationDirection
-					preferred = SECTION_ORDER[(SECTION_ORDER.index(current) + direction) % len(SECTION_ORDER)]
+					preferred = preferredSection()
 					# As soon as the next section is found, further content rows
 					# cannot improve the destination (unless restoring a saved control).
 					if section == preferred and (preferred != "Main content" or trackRow(obj, self.processID) is not None) and (preferred not in remembered or tuple(obj.UIAElement.GetRuntimeId()) == remembered[preferred]):
 						break
 			available = [name for name in SECTION_ORDER if name in sections]
 			direction = self._navigationDirection
-			preferred = SECTION_ORDER[(SECTION_ORDER.index(current) + direction) % len(SECTION_ORDER)]
+			preferred = preferredSection()
 			if not any(name != current for name in available):
 				ui.message("No other Apple Music section is available.")
 				return

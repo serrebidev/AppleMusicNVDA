@@ -54,6 +54,12 @@ These are the add-on's default shortcuts.
 | --- | --- |
 | F6 | Move to the next available section. |
 | Shift+F6 | Move to the previous available section. |
+| Control+1 | Focus Home in the sidebar without opening it. |
+| Control+2 | Open New. |
+| Control+3 | Open Radio. |
+| Control+4 | Open Library. |
+| Control+5 | Open Playlists. |
+| Control+6 | Open Settings from the account menu. |
 | Home or End | Move to the first or last track. |
 | Enter or Numpad Enter | Play the focused track row. Other controls keep their normal Enter action. |
 | Control+Alt+Up Arrow | Favorite the focused song or album, or the current song from player controls. |
@@ -68,7 +74,12 @@ Music is active, then find the command under **Apple Music**.
 
 Press **F6** to move through Search, Sidebar, Player, Main content, Queue, and
 Lyrics. **Shift+F6** moves in reverse. Navigation wraps around and skips hidden
-or unavailable sections.
+or unavailable sections. Closed Queue and Lyrics panels are detected from their
+toggle state so long playlists do not need a full control scan before Search.
+
+Press **Control+1** to focus Home without opening it. **Control+2** through
+**Control+5** open New, Radio, Library, or Playlists. **Control+6** opens the
+account menu and then Settings.
 
 The add-on remembers the last control you left in each section. Moving between
 sections does not activate buttons or start playback. Use **Tab** or the arrow

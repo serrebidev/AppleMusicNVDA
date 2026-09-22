@@ -23,7 +23,13 @@ Queue, Lyrics, then back to the first available section. Hidden sections are ski
 The last control left with F6 is remembered for each section. Use Tab and arrow
 keys within sections. Switching sections changes focus without activating controls.</p>
 <p>Known and remembered controls are queried directly for faster F6 navigation.
-Fallback discovery reuses parent information instead of repeatedly reading it.</p>
+Closed Queue and Lyrics panels are skipped from their toggle state, avoiding a
+full playlist scan before Search. Fallback discovery remains available when Apple
+Music does not expose a reliable panel state.</p>
+<p>Press <strong>Control+1</strong> to focus Home without opening it.
+<strong>Control+2</strong> through <strong>Control+5</strong> open New, Radio,
+Library, or Playlists. <strong>Control+6</strong> opens Settings through the
+account menu.</p>
 <p>Close menus and dialogs before switching sections. Detection uses English
 accessible names and roles. Queue and Lyrics need named accessible containers;
 unsupported controls are grouped into Main content.</p>
@@ -76,7 +82,7 @@ command under Apple Music. The shortcut is active only in AppleMusic.exe.</p>
 <h2>Requirements and limitations</h2>
 <p>This version targets NVDA 2025.1 through 2027.1 and English Apple Music
 menu labels. No AutoHotkey or external UI Automation library is needed.
-Version 0.4.5 passes 125 simulated-control tests. Live NVDA MCP testing on NVDA
+Version 0.4.6 passes 132 simulated-control tests. Live NVDA MCP testing on NVDA
 2027.1 confirmed settled Home and End announcements in a 229-track playlist;
 Page Up and Page Down also matched refreshed focus reports. Fresh braille testing,
 full album transitions, and open Queue/Lyrics cycling still need testing.</p>
