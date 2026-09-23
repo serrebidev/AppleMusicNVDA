@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 .firecrawl/
 dist/
+AGENTS.local.md
