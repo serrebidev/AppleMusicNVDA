@@ -3,6 +3,11 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.12
+
+- Cloud releases now run the tests and publish the add-on with its checksum.
+- 152 automated tests pass. No new live NVDA or Apple Music checks were performed.
+
 ## Changes in 0.4.10
 
 - From player controls, favorite, remove favorite and Suggest Less find the
