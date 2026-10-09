@@ -23,6 +23,24 @@
   and live testing separately; only claim speech, braille, or focus behavior was
   verified live when it was actually exercised with NVDA and Apple Music.
 
+## Release
+
+- Before every release, install the built package into the owner's NVDA for
+  testing: `python build.py`, then
+  `Start-Process dist\AppleMusic-<version>.nvda-addon` and let the owner
+  confirm NVDA's prompt and restart. Never use `pendingInstall` while NVDA runs.
+  Wait for the owner's go-ahead before tagging or publishing.
+- Every GitHub release also goes to the NVDA Add-on Store. After the release
+  assets exist, submit with:
+  `gh issue create -R nvaccess/addon-datastore --title "[Submit add-on]: Apple Music <version>" --body-file <file>`
+  where the file holds the `registerAddon.yml` form fields as `### Download URL`,
+  `### Source URL`, `### Publisher` (serrebidev), `### Channel`,
+  `### License Name` (GPL v2) and `### License URL`
+  (https://www.gnu.org/licenses/gpl-2.0.html), each followed by its value.
+  Use channel `beta` while `lastTestedNVDAVersion` is experimental in
+  `transform/nvdaAPIVersions.json` of that repo, `stable` otherwise. Confirm the
+  bot's "has been accepted" comment, and never change a submitted package.
+
 ## Behavior to preserve
 
 - Keep UI operations on NVDA's main thread. Use scheduled callbacks for waits
