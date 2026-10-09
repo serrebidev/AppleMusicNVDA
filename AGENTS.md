@@ -31,12 +31,13 @@
   confirm NVDA's prompt and restart. Never use `pendingInstall` while NVDA runs.
   Wait for the owner's go-ahead before tagging or publishing.
 - Every GitHub release also goes to the NVDA Add-on Store. After the release
-  assets exist, submit with:
-  `gh issue create -R nvaccess/addon-datastore --title "[Submit add-on]: Apple Music <version>" --body-file <file>`
-  where the file holds the `registerAddon.yml` form fields as `### Download URL`,
-  `### Source URL`, `### Publisher` (serrebidev), `### Channel`,
-  `### License Name` (GPL v2) and `### License URL`
-  (https://www.gnu.org/licenses/gpl-2.0.html), each followed by its value.
+  assets exist, open the store's web form pre-filled, for the owner to submit:
+  `https://github.com/nvaccess/addon-datastore/issues/new?template=registerAddon.yml`
+  plus `&title=`, `&download-url=` (the release asset), `&source-url=`,
+  `&publisher=serrebidev`, `&channel=`, `&license-name=GPL+v2` and
+  `&license-url=https://www.gnu.org/licenses/gpl-2.0.html`. Do not use
+  `gh issue create`: only the form adds the `autoSubmissionFromIssue` label that
+  starts the store's checks, and outside users cannot add it later.
   Use channel `beta` while `lastTestedNVDAVersion` is experimental in
   `transform/nvdaAPIVersions.json` of that repo, `stable` otherwise. Confirm the
   bot's "has been accepted" comment, and never change a submitted package.
