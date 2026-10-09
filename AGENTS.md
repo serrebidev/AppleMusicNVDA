@@ -38,7 +38,8 @@
   `&license-url=https://www.gnu.org/licenses/gpl-2.0.html`. Do not use
   `gh issue create`: only the form adds the `autoSubmissionFromIssue` label that
   starts the store's checks, and outside users cannot add it later.
-  Use channel `beta` while `lastTestedNVDAVersion` is experimental in
+  The Channel dropdown ignores `&channel=` and defaults to stable, so it must
+  be picked by hand. Use channel `beta` while `lastTestedNVDAVersion` is experimental in
   `transform/nvdaAPIVersions.json` of that repo, `stable` otherwise. Confirm the
   bot's "has been accepted" comment, and never change a submitted package.
 
