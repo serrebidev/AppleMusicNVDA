@@ -36,7 +36,8 @@ Grab the latest build from the
 For a version-by-version history, see the [changelog](CHANGELOG.md).
 
 You need NVDA and the Windows Apple Music app. The current compatibility
-metadata targets NVDA 2025.1 through 2027.1. English Apple Music menus are
+metadata targets NVDA 2025.1 through 2026.3, so the add-on can ship on the Add-on
+Store's stable channel. NVDA 2027.1 alpha asks once to install it anyway. English Apple Music menus are
 supported, including both Favorite and Favourite spellings.
 
 1. Download the `.nvda-addon` file.

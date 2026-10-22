@@ -3,6 +3,12 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.13
+
+- Last tested NVDA version is now 2026.3, the newest stable release, so the
+  add-on ships on the Add-on Store's stable channel. NVDA 2027.1 alpha asks once
+  to install it anyway. No code changes.
+
 ## Changes in 0.4.12
 
 - Cloud releases now run the tests and publish the add-on with its checksum.
