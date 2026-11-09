@@ -30,10 +30,12 @@
   `Start-Process dist\AppleMusic-<version>.nvda-addon` and let the owner
   confirm NVDA's prompt and restart. Never use `pendingInstall` while NVDA runs.
   Wait for the owner's go-ahead before tagging or publishing.
-- Every GitHub release also goes to the NVDA Add-on Store. After the release
+- Every Forgejo release also goes to the NVDA Add-on Store. After the release
   assets exist, open the store's web form pre-filled, for the owner to submit:
   `https://github.com/nvaccess/addon-datastore/issues/new?template=registerAddon.yml`
-  plus `&title=`, `&download-url=` (the release asset), `&source-url=`,
+  plus `&title=`, `&download-url=` (the Forgejo release asset at
+  `https://git.serrebiradio.com/serrebi/AppleMusicNVDA/releases/download/`),
+  `&source-url=https://git.serrebiradio.com/serrebi/AppleMusicNVDA`,
   `&publisher=serrebidev`, `&channel=`, `&license-name=GPL+v2` and
   `&license-url=https://www.gnu.org/licenses/gpl-2.0.html`. Do not use
   `gh issue create`: only the form adds the `autoSubmissionFromIssue` label that

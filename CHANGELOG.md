@@ -3,6 +3,14 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.14
+
+- Releases move from GitHub to Forgejo
+  (https://git.serrebiradio.com/serrebi/AppleMusicNVDA). Download, source,
+  and issue links now point there, including the URLs used for Add-on Store
+  submissions. No code changes.
+- 152 automated tests pass. No new live NVDA or Apple Music checks were performed.
+
 ## Changes in 0.4.13
 
 - Last tested NVDA version is now 2026.3, the newest stable release, so the

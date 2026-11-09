@@ -32,7 +32,7 @@ for offline use. The shortcuts and basic steps are also listed below.
 ## Download and install
 
 Grab the latest build from the
-[Releases page](https://github.com/serrebidev/AppleMusicNVDA/releases/latest).
+[Releases page](https://git.serrebiradio.com/serrebi/AppleMusicNVDA/releases/latest).
 For a version-by-version history, see the [changelog](CHANGELOG.md).
 
 You need NVDA and the Windows Apple Music app. The current compatibility
@@ -197,6 +197,6 @@ The add-on makes no network requests.
 ## Community and support
 
 Report bugs and request features in
-[Issues](https://github.com/serrebidev/AppleMusicNVDA/issues).
+[Issues](https://git.serrebiradio.com/serrebi/AppleMusicNVDA/issues).
 For questions, feedback, and release news, join the
 [SerrebiProjects Telegram group](https://t.me/SerrebiProjects).
