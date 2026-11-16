@@ -4,6 +4,8 @@ A free NVDA add-on for Apple Music on Windows, built for quicker keyboard
 navigation, clearer Home card announcements, and easy access to Favorite and
 Suggest Less.
 
+[![Join SerrebiProjects on Telegram](https://img.shields.io/badge/Telegram-SerrebiProjects-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/SerrebiProjects)
+
 ## Features
 
 - Move between Search, Sidebar, Player, Main content, and supported open Queue
@@ -200,3 +202,9 @@ Report bugs and request features in
 [Issues](https://git.serrebiradio.com/serrebi/AppleMusicNVDA/issues).
 For questions, feedback, and release news, join the
 [SerrebiProjects Telegram group](https://t.me/SerrebiProjects).
+
+More serrebi projects: [projects.serrebiradio.com](https://projects.serrebiradio.com)
+
+## Credits
+
+See [CREDITS.md](CREDITS.md) for where the ideas behind this project came from, and the third-party projects it builds on.
