@@ -980,6 +980,27 @@ class SuggestLessTests(unittest.TestCase):
         self.assertEqual(self.messages, [])
         gesture.send.assert_not_called()
 
+    def test_album_row_skips_number_duration_and_badge_cells(self):
+        title = self.clickableTrack()
+        number = Node("STATICTEXT", "1")
+        number.location = (50, 200, 10, 20)
+        duration = Node("STATICTEXT", "4:03")
+        duration.location = (500, 200, 30, 20)
+        badge = Node("STATICTEXT", "\U0010009d")
+        badge.location = (190, 200, 14, 20)
+        grid = self.track.firstChild
+        grid.firstChild = number
+        number.next, badge.next, title.next, duration.next = badge, title, duration, None
+        number.parent = badge.parent = title.parent = duration.parent = grid
+        cells = {55: number, 110: title, 195: badge, 505: duration}
+        music.UIAHandler.handler.clientObject.ElementFromPointBuildCache = Mock(
+            side_effect=lambda point, cache: cells[point.x].BuildUpdatedCache(cache)
+        )
+        self.app.script_playTrack(Mock())
+        self.drain()
+        self.assertEqual(music.mouseHandler.doPrimaryClick.call_count, 2)
+        self.assertEqual(music.winUser.setCursorPos.call_args_list[0].args, (110, 210))
+
     def test_covered_track_falls_back_to_play_menu(self):
         self.clickableTrack(hitTitle=False)
         self.app.script_playTrack(Mock())

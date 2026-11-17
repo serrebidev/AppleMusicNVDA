@@ -203,6 +203,14 @@ def trackMoreButton(row, processID):
 	return None
 
 
+def isPlayableText(name):
+	"""False for a track number, a duration or an icon glyph; true for a title."""
+	name = (name or "").strip()
+	if re.fullmatch(r"\d+(?::\d{2}){0,2}", name):
+		return False
+	return any(char.isalnum() for char in name)
+
+
 def trackClickPoint(row, processID):
 	"""A plain text cell of this row whose own centre hit-tests to that cell.
 
@@ -222,6 +230,11 @@ def trackClickPoint(row, processID):
 		if obj.states & {State.INVISIBLE, State.OFFSCREEN, State.UNAVAILABLE}:
 			continue
 		if obj.role == Role.STATICTEXT and obj.name and obj.firstChild is None:
+			# Album rows lead with the track number and end with the duration:
+			# Apple Music ignores double-clicks on those. Icon glyphs (explicit
+			# badge) are private-use characters. Only title-like text plays.
+			if not isPlayableText(obj.name):
+				continue
 			left, top, width, height = obj.location
 			if width > 0 and height > 0:
 				x, y = left + min(10, width // 2), top + height // 2

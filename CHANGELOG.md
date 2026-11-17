@@ -3,6 +3,16 @@
 Release history previously recorded in the README. Test results and outstanding
 live checks describe each release at the time they were recorded.
 
+## Changes in 0.4.15
+
+- Fixed: Enter on an album track did nothing. It double-clicked the track
+  number, which Apple Music ignores. It now double-clicks the title, and falls
+  back to the More menu if the title cannot be clicked safely.
+- 153 automated tests pass. Before release, live checks showed in Apple Music
+  that a double-click on the title or blank row space plays and on the track
+  number or duration does not. The fixed add-on was installed in NVDA for the
+  owner to test; speech and braille were not tested by the agent.
+
 ## Changes in 0.4.14
 
 - Releases move from GitHub to Forgejo
